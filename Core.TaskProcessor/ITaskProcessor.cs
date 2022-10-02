@@ -24,7 +24,6 @@ public interface ITaskProcessor
     /// </summary>
     /// <param name="queue">queue to run tasks and continuations on</param>
     /// <param name="tenant">tenant id</param>
-    /// <param name="batchId">unique batch id</param>
     /// <param name="tasks">list of tasks</param>
     /// <param name="continuations">tasks that will be queued when batch is done</param>
     /// <param name="scope">describes batch</param>
@@ -77,13 +76,13 @@ public interface ITaskProcessor
     /// <summary>
     ///     create or update schedule
     /// </summary>
-
     Task UpsertScheduleAsync(ScheduleData schedule, TaskData task);
 
     /// <summary>
     ///   execute schedule without affecting next execution
     /// </summary>
-    Task<bool> TriggerSchedule(string id);
+    /// <returns>true when task queued</returns>
+    Task<bool> TriggerScheduleAsync(string id);
 
     /// <summary>
     ///     deletes schedule by id

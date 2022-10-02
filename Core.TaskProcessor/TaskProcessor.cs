@@ -9,11 +9,9 @@ namespace Core.TaskProcessor;
 public class TaskProcessor : ITaskProcessor
 {
     private readonly ActionBlock<TaskContext> _actionBlock;
-    private readonly LuaScript _batchScript;
     private readonly TaskProcessorOptions _options;
     private readonly RedisKey[] _queues;
     private readonly ConnectionMultiplexer _redis;
-    private readonly LuaScript _scheduleScript;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<string, TaskContext> _tasks = new();
 
@@ -48,28 +46,6 @@ public class TaskProcessor : ITaskProcessor
         {
             MaxDegreeOfParallelism = _options.MaxWorkers
         });
-
-        _batchScript = LuaScript.Prepare($@"
-local batches = redis.call('zrange', '{Prefix("batches:")}'..@tenant, 0, {long.MaxValue}, 'BYSCORE', 'LIMIT', @skip, @take);
-
-local res = {{}}
-for i, v in ipairs(batches) do
-  res[i] = redis.call('hgetall', '{Prefix("batch:")}'..v);
-end
-
-return res;
-");
-
-        _scheduleScript = LuaScript.Prepare($@"
-local schedules = redis.call('zrange', '{Prefix("schedules:")}'..@tenant, 0, {long.MaxValue}, 'BYSCORE', 'LIMIT', @skip, @take);
-
-local res = {{}}
-for i, v in ipairs(schedules) do
-  res[i] = redis.call('hgetall', '{Prefix("schedule:")}'..v);
-end
-
-return res;
-");
 
         foreach (var q in _options.Queues)
             // new tasks available -> fetch
@@ -721,7 +697,7 @@ return #(taskIds);
         return await ok;
     }
 
-    public async Task<bool> TriggerSchedule(string id)
+    public async Task<bool> TriggerScheduleAsync(string id)
     {
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
@@ -734,6 +710,7 @@ return #(taskIds);
         return await tra.ExecuteAsync().ConfigureAwait(false);
     }
 
+    // not cluster safe - queue and task on same shard???
     private async Task<ScheduleInfo?> TriggerScheduleInternal(string id, IDatabase db, ITransaction tra)
     {
         var data = (await db.HashGetAllAsync(Prefix($"schedule:{id}"))).ToDictionary(x => x.Name,
@@ -779,6 +756,7 @@ return #(taskIds);
         };
     }
 
+    // Not Cluster safe / schedules + schedule:on same shard?
     public async Task<int> ExecuteSchedules()
     {
         var db = _redis.GetDatabase();
@@ -824,21 +802,21 @@ return #(taskIds);
 #pragma warning disable CS4014
                         if (next.HasValue)
                         {
-                            tra.HashSetAsync(Prefix($"schedule:{id}"), "next", next.Value.ToUnixTimeSeconds());
-                            tra.SortedSetAddAsync(Prefix("schedules"), id, next.Value.ToUnixTimeSeconds());
+                            tra.HashSetAsync(Prefix($"schedule:{id}"), "next", next.Value.ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
+                            tra.SortedSetAddAsync(Prefix("schedules"), id, next.Value.ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
                         }
                         else
                         {
-                            db.SortedSetRemoveAsync(Prefix("schedules"), id, CommandFlags.FireAndForget);
-                            db.KeyDeleteAsync(Prefix($"schedule:{id}"), CommandFlags.FireAndForget);
+                            tra.SortedSetRemoveAsync(Prefix("schedules"), id, CommandFlags.FireAndForget);
+                            tra.KeyDeleteAsync(Prefix($"schedule:{id}"), CommandFlags.FireAndForget);
                         }
 #pragma warning restore CS4014
                     }
                     else
                     {
 #pragma warning disable CS4014
-                        db.SortedSetRemoveAsync(Prefix("schedules"), id, CommandFlags.FireAndForget);
-                        db.KeyDeleteAsync(Prefix($"schedule:{id}"), CommandFlags.FireAndForget);
+                        tra.SortedSetRemoveAsync(Prefix("schedules"), id, CommandFlags.FireAndForget);
+                        tra.KeyDeleteAsync(Prefix($"schedule:{id}"), CommandFlags.FireAndForget);
 #pragma warning restore CS4014
                     }
 
@@ -886,6 +864,7 @@ return #(taskIds);
 
     #region Stats
 
+    // Cluster safe
     public async Task<BatchInfo> GetBatch(string batchId)
     {
         var db = _redis.GetDatabase();
@@ -910,45 +889,50 @@ return #(taskIds);
             Total = (long)batch["total"],
             State = batch["state"]!,
             Duration = (double)batch["duration"]!,
-            Remaining = (long)batch["remaining"]!
+            Remaining = (long)batch["remaining"]!,
+            Scope = batch["scope"]!
         };
     }
 
+    // Cluster safe
     public async Task<ICollection<BatchInfo>> GetBatchesAsync(string tenant, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
 
-        var res = await db.ScriptEvaluateAsync(_batchScript, new
-        {
-            tenant,
-            skip,
-            take
-        }, CommandFlags.PreferReplica);
-
         var list = new List<BatchInfo>();
+        var sids = db.SortedSetRangeByScore(Prefix($"batches:{tenant}"), skip: skip, take: take, flags: CommandFlags.PreferReplica);
 
-        foreach (var batchResult in ((RedisResult[])res)!)
+        var res = new List<Task<HashEntry[]>>();
+
+        foreach (var sid in sids)
+            res.Add(db.HashGetAllAsync(Prefix($"batch:{sid}"), CommandFlags.PreferReplica));
+
+        await Task.WhenAll(res).ConfigureAwait(false);
+
+        foreach (var batchResult in res)
         {
-            var batch = batchResult.ToDictionary();
+            var batch = batchResult.Result.ToDictionary();
             var end = (long)batch["end"];
             list.Add(new BatchInfo
             {
-                Id = (string)batch["id"]!,
+                Id = batch["id"]!,
                 Start = DateTimeOffset.FromUnixTimeSeconds((long)batch["start"]).DateTime,
                 End = end <= 0 ? null : DateTimeOffset.FromUnixTimeSeconds(end).DateTime,
                 Done = (long)batch["done"],
                 Canceled = (long)batch["canceled"],
                 Failed = (long)batch["failed"],
                 Total = (long)batch["total"],
-                State = (string)batch["state"]!,
+                State = batch["state"]!,
                 Duration = (double)batch["duration"]!,
-                Remaining = (long)batch["remaining"]!
+                Remaining = (long)batch["remaining"]!,
+                Scope = batch["scope"]!
             });
         }
 
         return list;
     }
 
+    // Cluster safe
     public async Task<ICollection<QueueInfo>> GetQueuesAsync()
     {
         var db = _redis.GetDatabase();
@@ -966,6 +950,7 @@ return #(taskIds);
         return list;
     }
 
+    // Cluster safe
     public async Task<QueueInfo> GetQueueAsync(string name)
     {
         var db = _redis.GetDatabase();
@@ -974,10 +959,12 @@ return #(taskIds);
         {
             Name = name,
             Length = await db.ListLengthAsync(Prefix($"queue:{name}")),
-            Checkout = await db.SortedSetLengthAsync(Prefix($"queue:{name}:checkout"))
+            Checkout = await db.ListLengthAsync(Prefix($"queue:{name}:checkout")),
+            Deadletter = await db.ListLengthAsync(Prefix($"queue:{name}:deadletter"))
         };
     }
 
+    // Cluster safe
     public async Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
@@ -1005,22 +992,25 @@ return #(taskIds);
         return list;
     }
 
+    // Cluster safe
     public async Task<ICollection<ScheduleInfo>> GetSchedules(string tenant, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
 
-        var res = await db.ScriptEvaluateAsync(_scheduleScript, new
-        {
-            tenant,
-            skip,
-            take
-        }, CommandFlags.PreferReplica);
-
         var list = new List<ScheduleInfo>();
+        var sids = await db.SortedSetRangeByScoreAsync(Prefix($"schedules:{tenant}"), skip: skip, take: take, 
+            flags: CommandFlags.PreferReplica).ConfigureAwait(false);
 
-        foreach (var scheduleResult in ((RedisResult[])res)!)
+        var res = new List<Task<HashEntry[]>>();
+
+        foreach (var sid in sids)
+            res.Add(db.HashGetAllAsync(Prefix($"schedules:{sid}"), CommandFlags.PreferReplica));
+
+        await Task.WhenAll(res).ConfigureAwait(false);
+
+        foreach (var scheduleResult in res)
         {
-            var schedule = scheduleResult.ToDictionary();
+            var schedule = scheduleResult.Result.ToDictionary();
             list.Add(new ScheduleInfo
             {
                 Scope = (string)schedule["scope"]!,
