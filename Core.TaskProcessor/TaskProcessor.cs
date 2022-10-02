@@ -138,17 +138,18 @@ return res;
             if (continuations.Count > 100)
                 throw new ArgumentException("100 continuations max", nameof(continuations));
 
-            var continuationsId = new List<RedisValue>();
+            var continuationIds = new List<RedisValue>();
 
             foreach (var continuation in continuations)
             {
                 var taskId = Guid.NewGuid().ToString("D");
-                continuationsId.Add(taskId);
+                continuationIds.Add(taskId);
 
                 tra.HashSetAsync(Prefix($"task:{taskId}"), new[]
                 {
                     new HashEntry("id", taskId),
                     new HashEntry("batch", batchId),
+                    new HashEntry("tenant", tenant),
                     new HashEntry("continuation", true),
                     new HashEntry("data", continuation.Data),
                     new HashEntry("topic", continuation.Topic),
@@ -159,7 +160,7 @@ return res;
                 tra.KeyExpireAsync(Prefix($"task:{taskId}"), DateTime.UtcNow.Add(_options.Retention));
             }
 
-            tra.ListLeftPushAsync(Prefix($"batch:{batchId}:continuations"), continuationsId.ToArray());
+            tra.ListLeftPushAsync(Prefix($"batch:{batchId}:continuations"), continuationIds.ToArray());
         }
 
         foreach (var q in push)
@@ -201,6 +202,7 @@ return res;
             {
                 new HashEntry("id", taskId),
                 new HashEntry("batch", batchId),
+                new HashEntry("tenant", tenant),
                 new HashEntry("data", task.Data),
                 new HashEntry("topic", task.Topic),
                 new HashEntry("queue", task.Queue ?? queue),
@@ -283,11 +285,15 @@ end
                     Processor = this,
                     TaskId = j,
                     BatchId = (string)taskData["batch"]!,
-                    Tenant = (string)batchData["tenant"]!,
+                    Tenant = (string)taskData["tenant"]!,
                     Queue = (string?)taskData["queue"],
                     Cancel = linkedCts,
                     Topic = (string?)taskData["topic"] ?? string.Empty,
                     Data = (byte[])taskData["data"]!,
+                    IsContinuation = isContinuation,
+                    IsCancellation = false,
+                    Retries = (int?)taskData["retries"],
+                    ScheduleId = null
                 };
 
                 _tasks.TryAdd(info.TaskId, info);
@@ -301,8 +307,9 @@ end
                     TaskId = j,
                     BatchId = (string)taskData["batch"]!,
                     IsCancellation = true,
-                    IsContinuation = taskData.ContainsKey("continuation"),
+                    IsContinuation = isContinuation,
                     Queue = q,
+                    ScheduleId = null
                 });
             }
         } 
@@ -320,13 +327,15 @@ end
                 Cancel = linkedCts,
                 Topic = (string?)taskData["topic"] ?? string.Empty,
                 Data = (byte[])taskData["data"]!,
+                BatchId = null,
+                Retries = (int?)taskData["retries"],
+                IsCancellation = false,
+                IsContinuation = false
             };
 
             _tasks.TryAdd(info.TaskId, info);
             _actionBlock.Post(info);
         }
-
-        
 
         return true;
     }
@@ -452,13 +461,15 @@ end
 
                     }
 #pragma warning restore CS4014
-                    await tra.ExecuteAsync();
+                    await tra.ExecuteAsync().ConfigureAwait(false);
 
                     if (await remaining <= 0 && !task.IsContinuation)
                         await CompleteBatchAsync(task, db);
                 }
                 else
                 {
+                    var bla = task.Queue;
+                    var topic = task.Topic;
                     await _options.OnTaskStart(task).ConfigureAwait(false);
 
                     await Execute(task).ConfigureAwait(false);
@@ -948,7 +959,8 @@ return #(taskIds);
             {
                 Name = UnPrefix(q!).Replace("queue:", string.Empty),
                 Length = await db.ListLengthAsync(q),
-                Checkout = await db.SortedSetLengthAsync($"{q}:checkout")
+                Checkout = await db.ListLengthAsync($"{q}:checkout"),
+                Deadletter = _options.Deadletter ? await db.ListLengthAsync($"{q}:deadletter") : 0
             });
 
         return list;

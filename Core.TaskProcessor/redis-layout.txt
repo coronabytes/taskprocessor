@@ -60,10 +60,11 @@
   score: 0
 
 {prefix}:task:{task}				HASH
-  id		string
-  schedule	string?
-  batch		string?
-  tenant	string
-  data		byte[]
-  queue		string?
-  retries	int
+  id			string
+  schedule		string?
+  batch			string?
+  tenant		string
+  data			byte[]
+  queue			string?
+  retries		int
+  continuation	bool?

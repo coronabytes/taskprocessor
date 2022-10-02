@@ -22,12 +22,12 @@ public class UnitTest1
             Deadletter = true,
             OnTaskStart = info =>
             {
-                _output.WriteLine($"End: {info.Queue} {info.BatchId} {info.TaskId}");
+                _output.WriteLine($"Start: {info.Queue} {info.Topic}");
                 return Task.CompletedTask;
             },
             OnTaskEnd = info =>
             {
-                _output.WriteLine($"End: {info.Queue} {info.BatchId} {info.TaskId}");
+                _output.WriteLine($"End: {info.Queue} {info.Topic}");
                 return Task.CompletedTask;
             }
         })
@@ -35,8 +35,8 @@ public class UnitTest1
             Execute = async info =>
             {
                 //await info.ExtendLockAsync(TimeSpan.FromMinutes(5));
-                _output.WriteLine($"Process: {info.Queue} {info.BatchId} {info.TaskId}");
-                throw new Exception("error");
+                _output.WriteLine($"Process: {info.Queue} {info.Topic}");
+                //throw new Exception("error");
                 await Task.Delay(500, info.Cancel.Token);
             }
         };
@@ -45,13 +45,14 @@ public class UnitTest1
     [Fact]
     public async Task Enqueue()
     {
-        var batchId = Guid.NewGuid().ToString("D");
-
-        await _processor.EnqueueBatchAsync("q2", "1001",  new List<TaskData>
+        var batchId = await _processor.EnqueueBatchAsync("q2", "1001",  new List<TaskData>
         {
-            new(),
-            new(),
             new()
+            {
+                Topic = "t1"
+            },
+            //new(),
+            //new()
         }, new List<TaskData>
         {
             new()
@@ -66,11 +67,8 @@ public class UnitTest1
             }
         });
 
-        var batches = await _processor.GetBatchesAsync("1001");
-        _output.WriteLine(JsonConvert.SerializeObject(batches, Formatting.Indented));
+        _output.WriteLine($"Batch: {batchId}");
 
-        var queues = await _processor.GetQueuesAsync();
-        _output.WriteLine(JsonConvert.SerializeObject(queues, Formatting.Indented));
     }
 
 
@@ -79,6 +77,13 @@ public class UnitTest1
     {
         var batches = await _processor.GetBatchesAsync("1001");
         _output.WriteLine(JsonConvert.SerializeObject(batches, Formatting.Indented));
+    }
+
+    [Fact]
+    public async Task ListQueues()
+    {
+        var queues = await _processor.GetQueuesAsync();
+        _output.WriteLine(JsonConvert.SerializeObject(queues, Formatting.Indented));
     }
 
     [Fact]
