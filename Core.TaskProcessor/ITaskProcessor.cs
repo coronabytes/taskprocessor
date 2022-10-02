@@ -28,7 +28,8 @@ public interface ITaskProcessor
     /// <param name="tasks">list of tasks</param>
     /// <param name="continuations">tasks that will be queued when batch is done</param>
     /// <param name="scope">describes batch</param>
-    Task EnqueueBatchAsync(string queue, string tenant, string batchId, List<TaskData> tasks,
+    /// <returns>batch id</returns>
+    Task<string> EnqueueBatchAsync(string queue, string tenant, List<TaskData> tasks,
         List<TaskData>? continuations = null, string? scope = null);
 
 
@@ -41,7 +42,7 @@ public interface ITaskProcessor
     /// <summary>
     ///     cancel batch
     /// </summary>
-    Task CancelBatchAsync(string batchId);
+    Task<bool> CancelBatchAsync(string batchId);
 
     /// <summary>
     ///     manually ask for work (generally not needed to call this)
@@ -71,22 +72,18 @@ public interface ITaskProcessor
     /// <summary>
     ///     List tasks in queue with paging support
     /// </summary>
-    Task<ICollection<TaskData>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50);
+    Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50);
 
     /// <summary>
     ///     create or update schedule
     /// </summary>
-    /// <param name="globalUniqueId">guid</param>
-    /// <param name="tenant">tenant</param>
-    /// <param name="scope">scope</param>
-    /// <param name="topic">topic</param>
-    /// <param name="data">payload</param>
-    /// <param name="queue">queue the task will be scheduled on</param>
-    /// <param name="cron">cron expression (* * * * *)</param>
-    /// <param name="timeZoneId">IANA Timezone ID (Etc/UTC)</param>
-    /// <param name="unique">Stops scheduling another task when previous task not done</param>
-    Task UpsertScheduleAsync(string globalUniqueId, string tenant, string scope, string topic, byte[] data,
-        string queue, string cron, string? timeZoneId = null, bool unique = false);
+
+    Task UpsertScheduleAsync(ScheduleData schedule, TaskData task);
+
+    /// <summary>
+    ///   execute schedule without affecting next execution
+    /// </summary>
+    Task<bool> TriggerSchedule(string id);
 
     /// <summary>
     ///     deletes schedule by id

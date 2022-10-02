@@ -1,0 +1,69 @@
+﻿# Global
+
+{prefix}:global:run					STRING
+{prefix}:scheduler-lock				STRING	
+
+# Queues
+
+{prefix}:queue:{queue}				LIST
+{prefix}:queue:{queue}:deadletter	LIST
+{prefix}:queue:{queue}:event		PUBSUB
+  fetch
+
+# Batches
+
+{prefix}:batch:{batch}				HASH
+  id			string
+  start			long
+  end			long?
+  state			string
+  done			long
+  canceled		long
+  failed		long
+  duration		double
+  tenant		string
+  scope			string
+  total			long
+  remaining		long
+
+{prefix}:batch:{batch}:continuations LIST
+  {task}
+
+{prefix}:batches:{tenant}			SORTED SET
+  member: {batch}
+  score: unix timestamp (seconds) of creation
+
+{prefix}:batches:cleanup			SORTED SET
+  member: {batch}
+  score: unix timestamp (seconds) of eviction
+
+
+{prefix}:schedule:{schedule}		HASH
+  id		string
+  timezone	string
+  data		byte[]
+  topic		string
+  queue		string
+  scope		string
+  tenant	string
+  retries	int
+  cron		string
+  next		long
+  unique	bool
+
+{prefix}:schedules					SORTED SET
+  member: {schedule}
+  score: unix timestamp (seconds) of next execution
+
+{prefix}:schedules:{tenant}			SORTED SET
+  member: {schedule}
+  score: 0
+
+{prefix}:task:{task}				HASH
+  id		string
+  schedule	string?
+  batch		string?
+  tenant	string
+  data		byte[]
+  queue		string?
+  retries	int

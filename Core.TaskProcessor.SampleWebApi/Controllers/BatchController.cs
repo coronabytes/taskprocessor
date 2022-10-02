@@ -13,34 +13,27 @@ namespace Core.TaskProcessor.SampleWebApi.Controllers
             _processor = processor;
         }
 
-        [HttpPost]
+        [HttpPost("enqueue")]
         public async Task<string> Enqueue()
         {
             var batchId = Guid.NewGuid().ToString("D");
 
-            await _processor.EnqueueBatchAsync("default", "core", batchId, new List<TaskData>
+            await _processor.EnqueueBatchAsync("default", "core", new List<TaskData>
             {
-                new()
-                {
-                    TaskId = Guid.NewGuid().ToString("D")
-                },
-                new()
-                {
-                    TaskId = Guid.NewGuid().ToString("D")
-                },
+                new(),
+                new(),
             }, continuations: new List<TaskData>
             {
                 new()
                 {
-                    Topic = "continue",
-                    TaskId = Guid.NewGuid().ToString("D")
+                    Topic = "continue"
                 }
             }, "some tasks");
 
             return "ok";
         }
 
-        [HttpGet]
+        [HttpGet("list")]
         public async Task<IEnumerable<BatchInfo>> Get()
         {
             return await _processor.GetBatchesAsync("core").ConfigureAwait(false);

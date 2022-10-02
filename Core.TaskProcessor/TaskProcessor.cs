@@ -79,9 +79,11 @@ return res;
 
     public Func<TaskContext, Task> Execute { get; set; } = _ => Task.CompletedTask;
 
-    public async Task EnqueueBatchAsync(string queue, string tenant, string batchId, List<TaskData> tasks,
+    public async Task<string> EnqueueBatchAsync(string queue, string tenant, List<TaskData> tasks,
         List<TaskData>? continuations = null, string? scope = null)
     {
+        var batchId = Guid.NewGuid().ToString("D");
+
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
@@ -106,27 +108,46 @@ return res;
             new HashEntry("remaining", tasks.Count)
         });
 
+        var push = new Dictionary<string, List<RedisValue>>();
+
         foreach (var task in tasks)
-            tra.HashSetAsync(Prefix($"task:{task.TaskId}"), new[]
+        {
+            var taskId = Guid.NewGuid().ToString("D");
+
+            var q = task.Queue ?? queue;
+
+            if (!push.ContainsKey(q))
+                push.Add(q, new List<RedisValue>());
+
+            push[q].Add(taskId);
+
+            tra.HashSetAsync(Prefix($"task:{taskId}"), new[]
             {
-                new HashEntry("id", task.TaskId),
+                new HashEntry("id", taskId),
                 new HashEntry("batch", batchId),
+                new HashEntry("tenant", tenant),
                 new HashEntry("data", task.Data),
                 new HashEntry("topic", task.Topic),
                 new HashEntry("queue", task.Queue ?? queue),
                 new HashEntry("retries", task.Retries ?? _options.Retries)
             });
+        }
 
         if (continuations?.Any() == true)
         {
             if (continuations.Count > 100)
                 throw new ArgumentException("100 continuations max", nameof(continuations));
 
+            var continuationsId = new List<RedisValue>();
+
             foreach (var continuation in continuations)
             {
-                tra.HashSetAsync(Prefix($"task:{continuation.TaskId}"), new[]
+                var taskId = Guid.NewGuid().ToString("D");
+                continuationsId.Add(taskId);
+
+                tra.HashSetAsync(Prefix($"task:{taskId}"), new[]
                 {
-                    new HashEntry("id", continuation.TaskId),
+                    new HashEntry("id", taskId),
                     new HashEntry("batch", batchId),
                     new HashEntry("continuation", true),
                     new HashEntry("data", continuation.Data),
@@ -135,22 +156,22 @@ return res;
                     new HashEntry("retries", continuation.Retries ?? _options.Retries)
                 });
                 // continuations will not be deleted on completion, since they may run again
-                tra.KeyExpireAsync(Prefix($"task:{continuation.TaskId}"), DateTime.UtcNow.Add(_options.Retention));
+                tra.KeyExpireAsync(Prefix($"task:{taskId}"), DateTime.UtcNow.Add(_options.Retention));
             }
 
-            tra.ListLeftPushAsync(Prefix($"batch:{batchId}:continuations"),
-                continuations.Select(x => (RedisValue)x.TaskId).ToArray());
+            tra.ListLeftPushAsync(Prefix($"batch:{batchId}:continuations"), continuationsId.ToArray());
         }
 
-        foreach (var group in tasks.GroupBy(x => x.Queue))
+        foreach (var q in push)
         {
-            var q = group.Key ?? queue;
-            tra.ListLeftPushAsync(Prefix($"queue:{q}"), group.Select(x => (RedisValue)x.TaskId).ToArray());
-            tra.PublishAsync(Prefix($"queue:{q}:event"), "fetch");
+            tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
+            tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
         }
 
 #pragma warning restore CS4014
         await tra.ExecuteAsync().ConfigureAwait(false);
+
+        return batchId;
     }
 
     public async Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, List<TaskData> tasks)
@@ -164,37 +185,50 @@ return res;
         tra.HashIncrementAsync(Prefix($"batch:{batchId}"), "remaining", tasks.Count);
         tra.HashSetAsync(Prefix($"batch:{batchId}"), "state", "go");
 
+        var push = new Dictionary<string, List<RedisValue>>();
+
         foreach (var task in tasks)
-            tra.HashSetAsync(Prefix($"task:{task.TaskId}"), new[]
+        {
+            var taskId = Guid.NewGuid().ToString("D");
+            var q = task.Queue ?? queue;
+
+            if (!push.ContainsKey(q))
+                push.Add(q, new List<RedisValue>());
+
+            push[q].Add(taskId);
+
+            tra.HashSetAsync(Prefix($"task:{taskId}"), new[]
             {
-                new HashEntry("id", task.TaskId),
+                new HashEntry("id", taskId),
                 new HashEntry("batch", batchId),
                 new HashEntry("data", task.Data),
                 new HashEntry("topic", task.Topic),
                 new HashEntry("queue", task.Queue ?? queue),
                 new HashEntry("retries", task.Retries ?? _options.Retries)
             });
+        }
 
-        foreach (var group in tasks.GroupBy(x => x.Queue))
+        foreach (var q in push)
         {
-            var q = group.Key ?? queue;
-            tra.ListLeftPushAsync(Prefix($"queue:{q}"), group.Select(x => (RedisValue)x.TaskId).ToArray());
-            tra.PublishAsync(Prefix($"queue:{q}:event"), "fetch");
+            tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
+            tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
         }
 #pragma warning restore CS4014
         return await tra.ExecuteAsync().ConfigureAwait(false);
     }
 
-    public async Task CancelBatchAsync(string batchId)
+    public async Task<bool> CancelBatchAsync(string batchId)
     {
         var db = _redis.GetDatabase();
 
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
-        tra.HashSetAsync(Prefix($"batch:{batchId}"), "state", "cancel", When.Always, CommandFlags.FireAndForget);
+        var ok = tra.HashSetAsync(Prefix($"batch:{batchId}"), "state", "cancel", When.Exists);
         tra.PublishAsync(Prefix("global:cancel"), batchId, CommandFlags.FireAndForget);
 #pragma warning restore CS4014
         await tra.ExecuteAsync();
+
+        return await ok;
     }
 
     public async Task<bool> FetchAsync()
@@ -229,44 +263,70 @@ end
         var q = (string)r[0]!;
         var j = (string)r[1]!;
         var taskData = r[2].ToDictionary();
-        var batchData = r[3].ToDictionary();
-
+        
         var isContinuation = taskData.ContainsKey("continuation");
-        var state = (string)batchData["state"]!;
+        var isScheduled = taskData.ContainsKey("schedule");
+        var isBatch = taskData.ContainsKey("batch");
 
-        if (state == "go" || (isContinuation && state == "done" ))
+        if (isBatch)
         {
-            var cts = new CancellationTokenSource();
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _shutdown.Token);
+            var batchData = r[3].ToDictionary();
+            var state = (string)batchData["state"]!;
+
+            if (state == "go" || (isContinuation && state == "done"))
+            {
+                var cts = new CancellationTokenSource();
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _shutdown.Token);
+
+                var info = new TaskContext
+                {
+                    Processor = this,
+                    TaskId = j,
+                    BatchId = (string)taskData["batch"]!,
+                    Tenant = (string)batchData["tenant"]!,
+                    Queue = (string?)taskData["queue"],
+                    Cancel = linkedCts,
+                    Topic = (string?)taskData["topic"] ?? string.Empty,
+                    Data = (byte[])taskData["data"]!,
+                };
+
+                _tasks.TryAdd(info.TaskId, info);
+                _actionBlock.Post(info);
+            }
+            else if (state == "canceled")
+            {
+                _actionBlock.Post(new TaskContext
+                {
+                    Processor = this,
+                    TaskId = j,
+                    BatchId = (string)taskData["batch"]!,
+                    IsCancellation = true,
+                    IsContinuation = taskData.ContainsKey("continuation"),
+                    Queue = q,
+                });
+            }
+        } 
+        else if (isScheduled)
+        {
+            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
 
             var info = new TaskContext
             {
                 Processor = this,
                 TaskId = j,
-                BatchId = (string)taskData["batch"]!,
-                Tenant = (string)batchData["tenant"]!,
+                ScheduleId = (string)taskData["schedule"]!,
+                Tenant = (string)taskData["tenant"]!,
                 Queue = (string?)taskData["queue"],
                 Cancel = linkedCts,
                 Topic = (string?)taskData["topic"] ?? string.Empty,
                 Data = (byte[])taskData["data"]!,
-                IsContinuation = isContinuation
             };
 
             _tasks.TryAdd(info.TaskId, info);
             _actionBlock.Post(info);
         }
-        else if (state == "canceled")
-        {
-            _actionBlock.Post(new TaskContext
-            {
-                Processor = this,
-                TaskId = j,
-                BatchId = (string)taskData["batch"]!,
-                IsCancellation = true,
-                IsContinuation = taskData.ContainsKey("continuation"),
-                Queue = q,
-            });
-        }
+
+        
 
         return true;
     }
@@ -597,39 +657,41 @@ return #(taskIds);
 
     #region Schedule
 
-    public async Task UpsertScheduleAsync(string globalUniqueId, string tenant, string scope, string topic, byte[] data,
-        string queue,
-        string cron, string? timeZoneId = null, bool unique = false)
+    public async Task UpsertScheduleAsync(ScheduleData schedule, TaskData task)
     {
-        var cronEx = CronExpression.Parse(cron);
+        if (task.Queue == null)
+            throw new ArgumentNullException(nameof(task.Queue));
+
+        var cronEx = CronExpression.Parse(schedule.Cron);
         var now = DateTime.UtcNow;
 
-        var tz = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId ?? "Etc/UTC");
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "Etc/UTC");
         var next = (DateTimeOffset?)cronEx.GetNextOccurrence(now, tz);
 
         // sanity check?
         if (next.HasValue)
             if ((next.Value - now).TotalMinutes < 1.0d)
-                throw new ArgumentException("cron minimum of one minute", nameof(cron));
+                throw new ArgumentException("cron minimum of one minute", nameof(schedule.Cron));
 
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
-        tra.HashSetAsync(Prefix($"schedule:{globalUniqueId}"), new[]
+        tra.HashSetAsync(Prefix($"schedule:{schedule.ScheduleId}"), new[]
         {
-            new HashEntry("id", globalUniqueId),
-            new HashEntry("timezone", timeZoneId),
-            new HashEntry("data", data),
-            new HashEntry("topic", topic),
-            new HashEntry("queue", queue),
-            new HashEntry("scope", scope),
-            new HashEntry("tenant", tenant),
-            new HashEntry("cron", cron),
+            new HashEntry("id", schedule.ScheduleId),
+            new HashEntry("timezone", schedule.Timezone),
+            new HashEntry("data", task.Data),
+            new HashEntry("topic", task.Topic),
+            new HashEntry("queue", task.Queue ?? "default"),
+            new HashEntry("scope", schedule.Scope),
+            new HashEntry("tenant", schedule.Tenant),
+            new HashEntry("retries", task.Retries ?? _options.Retries),
+            new HashEntry("cron", schedule.Cron),
             new HashEntry("next", next!.Value.ToUnixTimeSeconds()),
-            new HashEntry("unique", unique ? globalUniqueId : string.Empty)
+            new HashEntry("unique", schedule.Unique)
         }).ConfigureAwait(false);
-        tra.SortedSetAddAsync(Prefix("schedules"), globalUniqueId, next!.Value.ToUnixTimeSeconds());
-        tra.SortedSetAddAsync(Prefix($"schedules:{tenant}"), globalUniqueId, 0);
+        tra.SortedSetAddAsync(Prefix("schedules"), schedule.ScheduleId, next!.Value.ToUnixTimeSeconds());
+        tra.SortedSetAddAsync(Prefix($"schedules:{schedule.Tenant}"), schedule.ScheduleId, 0);
 #pragma warning restore CS4014
         await tra.ExecuteAsync().ConfigureAwait(false);
     }
@@ -646,6 +708,64 @@ return #(taskIds);
         await tra.ExecuteAsync().ConfigureAwait(false);
 
         return await ok;
+    }
+
+    public async Task<bool> TriggerSchedule(string id)
+    {
+        var db = _redis.GetDatabase();
+        var tra = db.CreateTransaction();
+
+        var info = await TriggerScheduleInternal(id, db, tra).ConfigureAwait(false);
+
+        if (info == null)
+            return false;
+
+        return await tra.ExecuteAsync().ConfigureAwait(false);
+    }
+
+    private async Task<ScheduleInfo?> TriggerScheduleInternal(string id, IDatabase db, ITransaction tra)
+    {
+        var data = (await db.HashGetAllAsync(Prefix($"schedule:{id}"))).ToDictionary(x => x.Name,
+                        x => x.Value);
+
+        if (data.Count == 0)
+            return null;
+
+        data.TryGetValue("cron", out var cronEx);
+        data.TryGetValue("timezone", out var tzv);
+        data.TryGetValue("next", out var nextOffset);
+        data.TryGetValue("queue", out var queue);
+        data.TryGetValue("data", out var payload);
+        data.TryGetValue("unique", out var unique);
+        data.TryGetValue("tenant", out var tenant);
+        data.TryGetValue("retries", out var retries);
+
+#pragma warning disable CS4014
+
+        var newTaskId = unique == true ? id : Guid.NewGuid().ToString("D");
+
+        // when unique and task data exists -> abort transaction
+        if (unique == true)
+            tra.AddCondition(Condition.KeyNotExists(Prefix($"task:{newTaskId}")));
+
+        tra.HashSetAsync(Prefix($"task:{newTaskId}"), new[]
+        {
+            new HashEntry("schedule", id),
+            new HashEntry("tenant", tenant),
+            new HashEntry("data", payload),
+            new HashEntry("queue", queue),
+            new HashEntry("retries", retries)
+        }, CommandFlags.FireAndForget);
+
+        // enqueue
+        tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId);
+
+        return new ScheduleInfo
+        {
+            Cron = cronEx!,
+            Timezone = (string?)tzv ?? "Etc/UTC",
+            Unique = unique == true
+        };
     }
 
     public async Task<int> ExecuteSchedules()
@@ -669,64 +789,19 @@ return #(taskIds);
                 try
                 {
                     var id = (string)rid!;
-                    var data = (await db.HashGetAllAsync(Prefix($"schedule:{id}"))).ToDictionary(x => x.Name,
-                        x => x.Value);
-
-                    data.TryGetValue("cron", out var cronEx);
-                    data.TryGetValue("timezone", out var tzv);
-                    data.TryGetValue("next", out var nextOffset);
-                    data.TryGetValue("queue", out var queue);
-                    data.TryGetValue("data", out var payload);
-                    data.TryGetValue("unique", out var unique);
-                    data.TryGetValue("tenant", out var tenant);
 
                     var tra = db.CreateTransaction();
-#pragma warning disable CS4014
 
-                    var newTaskId = (string?)unique ?? Guid.NewGuid().ToString("N");
+                    var info = await TriggerScheduleInternal(id, db, tra);
 
-                    // when unique and task data exists -> abort transaction
-                    if ((string?)unique != null)
-                        tra.AddCondition(Condition.KeyNotExists(Prefix($"task:{newTaskId}")));
-
-                    tra.HashSetAsync(Prefix($"batch:{newTaskId}"), new[]
-                    {
-                        new HashEntry("start", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                        new HashEntry("end", 0),
-                        new HashEntry("state", "go"),
-                        new HashEntry("done", 0),
-                        new HashEntry("canceled", 0),
-                        new HashEntry("failed", 0),
-                        new HashEntry("duration", 0.0d),
-                        new HashEntry("tenant", tenant),
-                        new HashEntry("total", 1),
-                        new HashEntry("remaining", 1),
-                        new HashEntry("continuations", string.Empty)
-                    }, CommandFlags.FireAndForget);
-
-                    tra.SortedSetAddAsync(Prefix($"batches:{(string)tenant!}"), newTaskId,
-                        DateTimeOffset.UtcNow.ToUnixTimeSeconds(), CommandFlags.FireAndForget);
-                    tra.SortedSetAddAsync(Prefix("batches:cleanup"), newTaskId,
-                        DateTimeOffset.UtcNow.Add(_options.Retention).ToUnixTimeSeconds(), CommandFlags.FireAndForget);
-
-                    tra.HashSetAsync(Prefix($"task:{newTaskId}"), new[]
-                    {
-                        new HashEntry("batch", newTaskId),
-                        new HashEntry("schedule", id),
-                        new HashEntry("data", payload),
-                        new HashEntry("queue", queue),
-                        new HashEntry("retries", _options.Retries)
-                    }, CommandFlags.FireAndForget);
-
-                    // enqueue
-                    tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId);
-#pragma warning restore CS4014
+                    if (info == null)
+                        continue; // TODO: ???
 
                     // when recurring
-                    if (!string.IsNullOrWhiteSpace(cronEx))
+                    if (!string.IsNullOrWhiteSpace(info.Cron))
                     {
-                        var cron = CronExpression.Parse(cronEx);
-                        var tz = TimeZoneInfo.FindSystemTimeZoneById((string?)tzv ?? "Etc/UTC");
+                        var cron = CronExpression.Parse(info.Cron);
+                        var tz = TimeZoneInfo.FindSystemTimeZoneById(info.Timezone);
                         //var n = DateTimeOffset.FromUnixTimeSeconds((long)nextOffset);
 
                         // TODO: ???
@@ -756,14 +831,14 @@ return #(taskIds);
 #pragma warning restore CS4014
                     }
 
-                    var executed = await tra.ExecuteAsync();
+                    var executed = await tra.ExecuteAsync().ConfigureAwait(false);
 
-                    if ((string?)unique != null && !executed)
+                    if (info.Unique && !executed)
                         // transaction aborted -> update schedule
-                        if (!string.IsNullOrWhiteSpace(cronEx))
+                        if (!string.IsNullOrWhiteSpace(info.Cron))
                         {
-                            var cron = CronExpression.Parse(cronEx);
-                            var tz = TimeZoneInfo.FindSystemTimeZoneById((string?)tzv ?? "Etc/UTC");
+                            var cron = CronExpression.Parse(info.Cron);
+                            var tz = TimeZoneInfo.FindSystemTimeZoneById(info.Timezone);
 
                             //var n = DateTimeOffset.FromUnixTimeSeconds((long)nextOffset);
                             // TODO: ???
@@ -891,26 +966,27 @@ return #(taskIds);
         };
     }
 
-    public async Task<ICollection<TaskData>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50)
+    public async Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
 
         var taskIds = await db.ListRangeAsync(Prefix(queue), skip, skip + take,
             CommandFlags.PreferReplica).ConfigureAwait(false);
 
-        var list = new List<TaskData>(taskIds.Length);
+        var list = new List<TaskInfo>(taskIds.Length);
         foreach (var taskId in taskIds)
         {
             var hashValues = await db.HashGetAllAsync(Prefix($"task:{taskId}"), CommandFlags.PreferReplica)
                 .ConfigureAwait(false);
             var taskData = hashValues.ToDictionary();
 
-            list.Add(new TaskData
+            list.Add(new TaskInfo
             {
                 Topic = taskData["topic"]!,
                 TaskId = taskId!,
                 Tenant = taskData["tenant"]!,
-                Data = null!
+                Retries = (int)taskData["retries"]!,
+                Data = taskData["data"]!,
             });
         }
 

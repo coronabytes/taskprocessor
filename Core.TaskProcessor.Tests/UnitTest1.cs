@@ -47,32 +47,21 @@ public class UnitTest1
     {
         var batchId = Guid.NewGuid().ToString("D");
 
-        await _processor.EnqueueBatchAsync("q2", "1001", batchId, new List<TaskData>
+        await _processor.EnqueueBatchAsync("q2", "1001",  new List<TaskData>
         {
+            new(),
+            new(),
             new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            }
         }, new List<TaskData>
         {
             new()
             {
                 Topic = "c1",
-                TaskId = Guid.NewGuid().ToString("D"),
                 Queue = "q1"
             },
             new()
             {
                 Topic = "c2",
-                TaskId = Guid.NewGuid().ToString("D"),
                 Queue = "q3"
             }
         });
@@ -110,8 +99,21 @@ public class UnitTest1
     [Fact]
     public async Task Schedule()
     {
-        await _processor.UpsertScheduleAsync("123", "1001", "Fetch Emails", "email", new byte[] { }, "q1",
-            "*/2 * * * *", "Europe/Berlin");
+        await _processor.UpsertScheduleAsync(new ScheduleData
+        {
+            ScheduleId = "123",
+            Tenant = "1001",
+            Scope = "Fetch Emails",
+            Cron = "*/2 * * * *",
+            Timezone = "Etc/UTC",
+            Unique = true
+        }, new TaskData
+        {
+            Topic = "email",
+            Queue = "q1",
+            Data = new byte[] { },
+            Retries = 3,
+        });
     }
 
     [Fact]
