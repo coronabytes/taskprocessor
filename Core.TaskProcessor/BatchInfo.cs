@@ -2,8 +2,8 @@ namespace Core.TaskProcessor;
 
 public class BatchInfo
 {
-    public string Id { get; set; }
-    public string Scope { get; set; }
+    public string Id { get; set; } = string.Empty;
+    public string Scope { get; set; } = string.Empty;
     public DateTime Start { get; set; }
     public DateTime? End { get; set; }
     public long Done { get; set; }

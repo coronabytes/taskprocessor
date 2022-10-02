@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.ComponentModel;
 using System.Threading.Tasks.Dataflow;
 using Cronos;
 using StackExchange.Redis;
@@ -19,17 +20,11 @@ public class TaskProcessor : ITaskProcessor
     public TaskProcessor(TaskProcessorOptions options)
     {
         _options = options;
-        _queues = options.Queues.Select(x => (RedisKey)Prefix(x)).ToArray();
+        _queues = options.Queues.Select(x => (RedisKey)Prefix($"queue:{x}")).ToArray();
 
         _redis = ConnectionMultiplexer.Connect(options.Redis);
 
-        // new jobs available -> fetch
-        _redis.GetSubscriber().Subscribe(Prefix("task:events"), (channel, value) =>
-        {
-            FetchAsync().ContinueWith(_ => {});
-        });
-
-        // batch canceled -> search running jobs and terminate
+        // batch canceled -> search running tasks and terminate
         _redis.GetSubscriber().Subscribe(Prefix("global:cancel"), (channel, value) =>
         {
             var batchId = (string)value!;
@@ -46,7 +41,7 @@ public class TaskProcessor : ITaskProcessor
                 }
         });
 
-        // global run state changed -> pause/resume jobs + schedules
+        // global run state changed -> pause/resume tasks + schedules
         _redis.GetSubscriber().Subscribe(Prefix("global:run"), (channel, value) => { IsPaused = !(bool)value; });
 
         _actionBlock = new ActionBlock<TaskContext>(Process, new ExecutionDataflowBlockOptions
@@ -75,25 +70,12 @@ end
 
 return res;
 ");
+
+        foreach (var q in _options.Queues)
+            // new tasks available -> fetch
+            _redis.GetSubscriber().Subscribe(Prefix($"queue:{q}:event"),
+                (channel, value) => { FetchAsync().ContinueWith(_ => { }); });
     }
-
-#region Control
-
-    public bool IsPaused { get; private set; } = true;
-
-    public async Task Pause()
-    {
-        await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 0);
-        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), false);
-    }
-
-    public async Task Resume()
-    {
-        await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 1);
-        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), true);
-    }
-
-    #endregion
 
     public Func<TaskContext, Task> Execute { get; set; } = _ => Task.CompletedTask;
 
@@ -119,11 +101,9 @@ return res;
             new HashEntry("failed", 0),
             new HashEntry("duration", 0.0d),
             new HashEntry("tenant", tenant),
-            new HashEntry("scope", scope),
+            new HashEntry("scope", scope ?? string.Empty),
             new HashEntry("total", tasks.Count),
-            new HashEntry("remaining", tasks.Count),
-            new HashEntry("continuations",
-                string.Join(' ', continuations?.Select(x => x.TaskId) ?? Array.Empty<string>()))
+            new HashEntry("remaining", tasks.Count)
         });
 
         foreach (var task in tasks)
@@ -133,26 +113,76 @@ return res;
                 new HashEntry("batch", batchId),
                 new HashEntry("data", task.Data),
                 new HashEntry("topic", task.Topic),
-                new HashEntry("retries", _options.Retries)
+                new HashEntry("queue", task.Queue ?? queue),
+                new HashEntry("retries", task.Retries ?? _options.Retries)
             });
 
         if (continuations?.Any() == true)
-            foreach (var ctask in continuations)
-                tra.HashSetAsync(Prefix($"task:{ctask.TaskId}"), new[]
+        {
+            if (continuations.Count > 100)
+                throw new ArgumentException("100 continuations max", nameof(continuations));
+
+            foreach (var continuation in continuations)
+            {
+                tra.HashSetAsync(Prefix($"task:{continuation.TaskId}"), new[]
                 {
-                    new HashEntry("id", ctask.TaskId),
+                    new HashEntry("id", continuation.TaskId),
                     new HashEntry("batch", batchId),
                     new HashEntry("continuation", true),
-                    new HashEntry("data", ctask.Data),
-                    new HashEntry("topic", ctask.Topic),
-                    new HashEntry("retries", _options.Retries)
+                    new HashEntry("data", continuation.Data),
+                    new HashEntry("topic", continuation.Topic),
+                    new HashEntry("queue", continuation.Queue ?? queue),
+                    new HashEntry("retries", continuation.Retries ?? _options.Retries)
                 });
+                // continuations will not be deleted on completion, since they may run again
+                tra.KeyExpireAsync(Prefix($"task:{continuation.TaskId}"), DateTime.UtcNow.Add(_options.Retention));
+            }
 
+            tra.ListLeftPushAsync(Prefix($"batch:{batchId}:continuations"),
+                continuations.Select(x => (RedisValue)x.TaskId).ToArray());
+        }
 
-        tra.ListLeftPushAsync(Prefix(queue), tasks.Select(x => (RedisValue)x.TaskId).ToArray());
-        tra.PublishAsync(Prefix("task:events"), queue);
+        foreach (var group in tasks.GroupBy(x => x.Queue))
+        {
+            var q = group.Key ?? queue;
+            tra.ListLeftPushAsync(Prefix($"queue:{q}"), group.Select(x => (RedisValue)x.TaskId).ToArray());
+            tra.PublishAsync(Prefix($"queue:{q}:event"), "fetch");
+        }
+
 #pragma warning restore CS4014
-        await tra.ExecuteAsync();
+        await tra.ExecuteAsync().ConfigureAwait(false);
+    }
+
+    public async Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, List<TaskData> tasks)
+    {
+        var db = _redis.GetDatabase();
+        var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+        tra.AddCondition(Condition.KeyExists(Prefix($"batch:{batchId}")));
+        tra.AddCondition(Condition.HashNotEqual(Prefix($"batch:{batchId}"), "state", "canceled"));
+        tra.HashIncrementAsync(Prefix($"batch:{batchId}"), "total", tasks.Count);
+        tra.HashIncrementAsync(Prefix($"batch:{batchId}"), "remaining", tasks.Count);
+        tra.HashSetAsync(Prefix($"batch:{batchId}"), "state", "go");
+
+        foreach (var task in tasks)
+            tra.HashSetAsync(Prefix($"task:{task.TaskId}"), new[]
+            {
+                new HashEntry("id", task.TaskId),
+                new HashEntry("batch", batchId),
+                new HashEntry("data", task.Data),
+                new HashEntry("topic", task.Topic),
+                new HashEntry("queue", task.Queue ?? queue),
+                new HashEntry("retries", task.Retries ?? _options.Retries)
+            });
+
+        foreach (var group in tasks.GroupBy(x => x.Queue))
+        {
+            var q = group.Key ?? queue;
+            tra.ListLeftPushAsync(Prefix($"queue:{q}"), group.Select(x => (RedisValue)x.TaskId).ToArray());
+            tra.PublishAsync(Prefix($"queue:{q}:event"), "fetch");
+        }
+#pragma warning restore CS4014
+        return await tra.ExecuteAsync().ConfigureAwait(false);
     }
 
     public async Task CancelBatchAsync(string batchId)
@@ -179,15 +209,15 @@ if redis.replicate_commands~=nil then
   redis.replicate_commands() 
 end
 
-for i, v in ipairs(KEYS) do
-local r = redis.call('rpoplpush', v, v.."":checkout"");
-if r then
-  local t = redis.call('time')[1] + ARGV[1];
-  redis.call('zadd', v.."":pushback"", t, r);
-  local jobData = redis.call('hgetall', ""{Prefix("task:")}""..r);
-  local batchId = redis.call('hget', ""{Prefix("task:")}""..r, ""batch"");
+for i, queue in ipairs(KEYS) do
+local taskId = redis.call('rpoplpush', queue, queue.."":checkout"");
+if taskId then
+  local invis = redis.call('time')[1] + ARGV[1];
+  redis.call('zadd', queue.."":pushback"", invis, taskId);
+  local taskData = redis.call('hgetall', ""{Prefix("task:")}""..taskId);
+  local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
   local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
-  return {{v, r, jobData, batchData}}; 
+  return {{queue, taskId, taskData, batchData}}; 
 end;
 end
 ", _queues, new RedisValue[] { (long)_options.Retention.TotalSeconds });
@@ -195,17 +225,16 @@ end
         if (res.IsNull)
             return false;
 
-        var r = (RedisResult[])res;
+        var r = (RedisResult[])res!;
         var q = (string)r[0]!;
         var j = (string)r[1]!;
-        var jobData = r[2].ToDictionary();
-
-        // TODO: wenn schedule dann ist das null?
+        var taskData = r[2].ToDictionary();
         var batchData = r[3].ToDictionary();
 
-        var isContinuation = jobData.ContainsKey("continuation");
+        var isContinuation = taskData.ContainsKey("continuation");
+        var state = (string)batchData["state"]!;
 
-        if ((string)batchData["state"]! == "go" || isContinuation)
+        if (state == "go" || (isContinuation && state == "done" ))
         {
             var cts = new CancellationTokenSource();
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _shutdown.Token);
@@ -214,30 +243,28 @@ end
             {
                 Processor = this,
                 TaskId = j,
-                BatchId = (string)jobData["batch"]!,
+                BatchId = (string)taskData["batch"]!,
                 Tenant = (string)batchData["tenant"]!,
-                Queue = UnPrefix(q),
+                Queue = (string?)taskData["queue"],
                 Cancel = linkedCts,
-                Topic = (string?)jobData["topic"] ?? string.Empty,
-                Data = (byte[])jobData["data"]!,
+                Topic = (string?)taskData["topic"] ?? string.Empty,
+                Data = (byte[])taskData["data"]!,
                 IsContinuation = isContinuation
             };
 
             _tasks.TryAdd(info.TaskId, info);
             _actionBlock.Post(info);
         }
-        else
+        else if (state == "canceled")
         {
-            
-
             _actionBlock.Post(new TaskContext
             {
                 Processor = this,
                 TaskId = j,
-                BatchId = (string)jobData["batch"]!,
+                BatchId = (string)taskData["batch"]!,
                 IsCancellation = true,
-                IsContinuation = jobData.ContainsKey("continuation"),
-            Queue = q
+                IsContinuation = taskData.ContainsKey("continuation"),
+                Queue = q,
             });
         }
 
@@ -282,9 +309,296 @@ end
         }
     }
 
+    public Task<bool> ExtendLockAsync(string queue, string taskId, TimeSpan span)
+    {
+        var db = _redis.GetDatabase();
+        return db.SortedSetUpdateAsync(Prefix($"queue:{queue}:pushback"), taskId,
+            DateTimeOffset.UtcNow.Add(span).ToUnixTimeSeconds());
+    }
+
+    private string Prefix(string s)
+    {
+        if (!string.IsNullOrWhiteSpace(_options.Prefix))
+            return $"{_options.Prefix}:{s}";
+        return s;
+    }
+
+    private string UnPrefix(string s)
+    {
+        if (!string.IsNullOrWhiteSpace(_options.Prefix))
+            if (s.StartsWith(_options.Prefix + ":"))
+                return s.Substring(_options.Prefix.Length + 1);
+        return s;
+    }
+
+    private async Task Process(TaskContext task)
+    {
+        // force async task scheduling
+        await Task.Yield();
+
+        var db = _redis.GetDatabase();
+
+        if (task.IsCancellation)
+        {
+            var remaining = Task.FromResult(1L);
+
+            var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+            tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId);
+            tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId);
+            if (!task.IsContinuation)
+            {
+                tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "canceled", flags: CommandFlags.FireAndForget);
+                remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
+            }
+#pragma warning restore CS4014
+            await tra.ExecuteAsync().ConfigureAwait(false);
+
+            if (await remaining <= 0 && !task.IsContinuation)
+                await CompleteBatchAsync(task, db);
+
+            await _options.OnTaskEnd(task).ConfigureAwait(false);
+        }
+        else
+        {
+            var start = DateTimeOffset.UtcNow;
+
+            try
+            {
+                var retries = await db.HashDecrementAsync(Prefix($"task:{task.TaskId}"), "retries")
+                    .ConfigureAwait(false);
+
+                if (retries <= 0)
+                {
+                    var remaining = Task.FromResult(1L);
+
+                    var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+                    tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId,
+                        flags: CommandFlags.FireAndForget);
+                    tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
+
+                    if (!task.IsContinuation)
+                    {
+                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
+                            flags: CommandFlags.FireAndForget);
+                        remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+
+                        if (_options.Deadletter)
+                            tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                        else
+                            tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
+
+                    }
+#pragma warning restore CS4014
+                    await tra.ExecuteAsync();
+
+                    if (await remaining <= 0 && !task.IsContinuation)
+                        await CompleteBatchAsync(task, db);
+                }
+                else
+                {
+                    await _options.OnTaskStart(task).ConfigureAwait(false);
+
+                    await Execute(task).ConfigureAwait(false);
+
+                    var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+                    tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId,
+                        flags: CommandFlags.FireAndForget);
+
+                    var remaining = Task.FromResult(1L);
+
+                    if (!task.IsContinuation)
+                    {
+                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "done",
+                            flags: CommandFlags.FireAndForget);
+                        remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
+                            (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
+                    }
+
+                    tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId);
+
+                    tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
+#pragma warning restore CS4014
+                    await tra.ExecuteAsync().ConfigureAwait(false);
+
+                    if (await remaining <= 0 && !task.IsContinuation)
+                        await CompleteBatchAsync(task, db);
+
+                    await _options.OnTaskEnd(task).ConfigureAwait(false);
+                }
+            }
+            catch
+            {
+                var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+                tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId, flags: CommandFlags.FireAndForget);
+                tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId, flags: CommandFlags.FireAndForget);
+                tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
+
+                if (!task.IsContinuation)
+                {
+                    tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
+                        (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
+                }
+#pragma warning restore CS4014
+                await tra.ExecuteAsync().ConfigureAwait(false);
+            }
+            finally
+            {
+                _tasks.TryRemove(task.TaskId, out _);
+            }
+        }
+
+
+        // poll next task now
+        if (!_shutdown.IsCancellationRequested)
+            await FetchAsync();
+    }
+
+    private async Task CompleteBatchAsync(TaskContext task, IDatabase db)
+    {
+        var tra2 = db.CreateTransaction();
+#pragma warning disable CS4014
+        tra2.AddCondition(Condition.HashEqual(Prefix($"batch:{task.BatchId}"), "remaining", 0));
+        tra2.AddCondition(Condition.HashNotEqual(Prefix($"batch:{task.BatchId}"), "state", "done"));
+        tra2.HashSetAsync(Prefix($"batch:{task.BatchId}"), new[]
+        {
+            new HashEntry("end", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
+            new HashEntry("state", "done")
+        });
+        // push continuations into their queues
+        tra2.ScriptEvaluateAsync($@"
+if redis.replicate_commands~=nil then 
+  redis.replicate_commands() 
+end
+
+local continuations = redis.call('lrange', KEYS[1], 0, 100);
+
+for i, taskId in ipairs(continuations) do
+  local q = redis.call('hget', '{Prefix("task:")}'..taskId, 'queue');
+  redis.call('lpush', '{Prefix("queue:")}'..q, taskId);
+end;
+", new RedisKey[] { Prefix($"batch:{task.BatchId}:continuations") });
+#pragma warning restore CS4014
+        await tra2.ExecuteAsync().ConfigureAwait(false);
+    }
+
+    public async Task CleanUp()
+    {
+        var db = _redis.GetDatabase();
+
+        await db.ScriptEvaluateAsync($@"
+if redis.replicate_commands~=nil then 
+  redis.replicate_commands() 
+end
+
+local t = redis.call('time')[1];
+
+for i, v in ipairs(KEYS) do
+  local r = redis.call('zrange', v.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+  for j, w in ipairs(r) do
+    redis.call('lpush', v, w);
+    redis.call('zrem', v.."":pushback"", w);
+    redis.call('lrem', v.."":checkout"", 0, w);
+  end;
+end;
+
+local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+for k, batchId in ipairs(batches) do
+  local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
+  redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
+  redis.call('zrem', ""{Prefix("batches:")}""..tenant, batchId);
+  redis.call('del', ""{Prefix("batch:")}""..batchId);
+  redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
+end;
+", _queues);
+    }
+
+    public async Task<long> RequeueDeadletterAsync(string queue, int? retries = null, long? count = null)
+    {
+        var db = _redis.GetDatabase();
+
+        var res = await db.ScriptEvaluateAsync($@"
+if redis.replicate_commands~=nil then 
+  redis.replicate_commands() 
+end
+
+local t = redis.call('time')[1];
+local taskIds = redis.call('zrange', KEYS[2], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
+
+for j, taskId in ipairs(taskIds) do
+  redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);  
+  redis.call('lpush', KEYS[1], taskId);
+  redis.call('zrem', KEYS[2], taskId);
+end;
+
+return #(taskIds);
+", new RedisKey[]
+        {
+            Prefix($"queue:{queue}"), Prefix($"queue:{queue}:deadletter")
+        }, new RedisValue[]
+        {
+            count ?? 100, retries ?? _options.Retries
+        }).ConfigureAwait(false);
+
+        return (long)res;
+    }
+
+    public async Task<long> DiscardDeadletterAsync(string queue, long? count = null)
+    {
+        var db = _redis.GetDatabase();
+
+        var res = await db.ScriptEvaluateAsync($@"
+if redis.replicate_commands~=nil then 
+  redis.replicate_commands() 
+end
+
+local t = redis.call('time')[1];
+local taskIds = redis.call('zrange', KEYS[1], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
+
+for j, taskId in ipairs(taskIds) do
+  redis.call('zrem', KEYS[1], taskId);
+  redis.call('del', '{Prefix("task:")}'..taskId);  
+end;
+
+return #(taskIds);
+", new RedisKey[]
+        {
+            Prefix($"queue:{queue}:deadletter")
+        }, new RedisValue[]
+        {
+            count ?? 100
+        }).ConfigureAwait(false);
+
+        return (long)res;
+    }
+
+    #region Control
+
+    public bool IsPaused { get; private set; } = true;
+
+    public async Task Pause()
+    {
+        await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 0);
+        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), false);
+    }
+
+    public async Task Resume()
+    {
+        await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 1);
+        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), true);
+    }
+
+    #endregion
+
     #region Schedule
 
-    public async Task UpsertScheduleAsync(string globalUniqueId, string tenant, string scope, string topic, byte[] data, string queue,
+    public async Task UpsertScheduleAsync(string globalUniqueId, string tenant, string scope, string topic, byte[] data,
+        string queue,
         string cron, string? timeZoneId = null, bool unique = false)
     {
         var cronEx = CronExpression.Parse(cron);
@@ -347,8 +661,7 @@ end
         try
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-
-
+            
             var tasks = await db.SortedSetRangeByScoreAsync(Prefix("schedules"), 0, now, take: 100)
                 .ConfigureAwait(false);
 
@@ -386,7 +699,6 @@ end
                         new HashEntry("failed", 0),
                         new HashEntry("duration", 0.0d),
                         new HashEntry("tenant", tenant),
-                        new HashEntry("retries", _options.Retries),
                         new HashEntry("total", 1),
                         new HashEntry("remaining", 1),
                         new HashEntry("continuations", string.Empty)
@@ -402,11 +714,12 @@ end
                         new HashEntry("batch", newTaskId),
                         new HashEntry("schedule", id),
                         new HashEntry("data", payload),
-                        new HashEntry("retries", 0)
+                        new HashEntry("queue", queue),
+                        new HashEntry("retries", _options.Retries)
                     }, CommandFlags.FireAndForget);
 
                     // enqueue
-                    tra.ListLeftPushAsync(Prefix(queue), newTaskId);
+                    tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId);
 #pragma warning restore CS4014
 
                     // when recurring
@@ -482,180 +795,11 @@ end
             await db.LockReleaseAsync(Prefix("scheduler-lock"), Environment.MachineName).ConfigureAwait(false);
         }
     }
+
     #endregion
 
-    public Task<bool> ExtendLockAsync(string queue, string jobId, TimeSpan span)
-    {
-        var db = _redis.GetDatabase();
-        return db.SortedSetUpdateAsync(Prefix($"{queue}:pushback"), jobId,
-            DateTimeOffset.UtcNow.Add(span).ToUnixTimeSeconds());
-    }
-
-    private string Prefix(string s)
-    {
-        if (!string.IsNullOrWhiteSpace(_options.Prefix))
-            return $"{_options.Prefix}:{s}";
-        return s;
-    }
-
-    private string UnPrefix(string s)
-    {
-        if (!string.IsNullOrWhiteSpace(_options.Prefix))
-            if (s.StartsWith(_options.Prefix + ":"))
-                return s.Substring(_options.Prefix.Length + 1);
-        return s;
-    }
-
-    private async Task Process(TaskContext task)
-    {
-        // force async task scheduling
-        await Task.Yield();
-
-        var db = _redis.GetDatabase();
-
-        if (task.IsCancellation)
-        {
-            var tra = db.CreateTransaction();
-#pragma warning disable CS4014
-            tra.ListRemoveAsync(Prefix($"{task.Queue}:checkout"), task.TaskId);
-            tra.SortedSetRemoveAsync(Prefix($"{task.Queue}:pushback"), task.TaskId);
-            tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "canceled");
-            var remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
-#pragma warning restore CS4014
-            await tra.ExecuteAsync().ConfigureAwait(false);
-
-            if (await remaining <= 0)
-            {
-                var continuations = (string?)await db.HashGetAsync(Prefix($"batch:{task.BatchId}"), 
-                    "continuations").ConfigureAwait(false) ?? string.Empty;
-
-                var tra2 = db.CreateTransaction();
-#pragma warning disable CS4014
-                tra2.AddCondition(Condition.HashEqual(Prefix($"batch:{task.BatchId}"), "remaining", 0));
-                tra2.AddCondition(Condition.HashNotEqual(Prefix($"batch:{task.BatchId}"), "state", "done"));
-                tra2.HashSetAsync(Prefix($"batch:{task.BatchId}"), new[]
-                {
-                    new HashEntry("end", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                    new HashEntry("state", "done")
-                });
-
-                foreach (var c in continuations.Split(' ',
-                             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                    tra2.ListLeftPushAsync(Prefix($"{task.Queue}"), c);
-#pragma warning restore CS4014
-                await tra2.ExecuteAsync().ConfigureAwait(false);
-            }
-
-            await _options.OnTaskEnd(task).ConfigureAwait(false);
-        }
-        else
-        {
-            var start = DateTimeOffset.UtcNow;
-
-            try
-            {
-                var retries = await db.HashDecrementAsync(Prefix($"task:{task.TaskId}"), "retries").ConfigureAwait(false);
-
-                if (retries <= 0)
-                {
-                    var tra = db.CreateTransaction();
-#pragma warning disable CS4014
-                    tra.ListRemoveAsync(Prefix($"{task.Queue}:checkout"), task.TaskId, flags: CommandFlags.FireAndForget);
-                    tra.SortedSetRemoveAsync(Prefix($"{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
-
-                    if (!task.IsContinuation)
-                    {
-                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
-                            flags: CommandFlags.FireAndForget);
-                        tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining",
-                            flags: CommandFlags.FireAndForget);
-                    }
-
-                    tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
-#pragma warning restore CS4014
-                    await tra.ExecuteAsync();
-                }
-                else
-                {
-                    await _options.OnTaskStart(task).ConfigureAwait(false);
-
-                    await Execute(task).ConfigureAwait(false);
-
-                    var tra = db.CreateTransaction();
-#pragma warning disable CS4014
-                    tra.ListRemoveAsync(Prefix($"{task.Queue}:checkout"), task.TaskId,
-                        flags: CommandFlags.FireAndForget);
-
-                    var remaining = Task.FromResult(1L);
-
-                    if (!task.IsContinuation) 
-                    {
-                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "done",
-                            flags: CommandFlags.FireAndForget);
-                        remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining",
-                            flags: CommandFlags.FireAndForget);
-                    }
-
-                    tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
-                        (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
-                    tra.SortedSetRemoveAsync(Prefix($"{task.Queue}:pushback"), task.TaskId);
-
-                    tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
-#pragma warning restore CS4014
-                    await tra.ExecuteAsync().ConfigureAwait(false);
-
-                    if (await remaining <= 0 && !task.IsContinuation)
-                    {
-                        // TODO: gibts doch schon in jobdata
-                        var continuations = (string?)await db.HashGetAsync(Prefix($"batch:{task.BatchId}"),
-                            "continuations").ConfigureAwait(false) ?? string.Empty;
-
-                        var tra2 = db.CreateTransaction();
-#pragma warning disable CS4014
-                        tra2.AddCondition(Condition.HashEqual(Prefix($"batch:{task.BatchId}"), "remaining", 0));
-                        tra2.AddCondition(Condition.HashNotEqual(Prefix($"batch:{task.BatchId}"), "state", "done"));
-                        tra2.HashSetAsync(Prefix($"batch:{task.BatchId}"), new[]
-                        {
-                            new HashEntry("end", DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                            new HashEntry("state", "done")
-                        });
-                        foreach (var c in continuations.Split(' ',
-                                     StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                            tra2.ListLeftPushAsync(Prefix($"{task.Queue}"), c);
-#pragma warning restore CS4014
-                        await tra2.ExecuteAsync().ConfigureAwait(false);
-                    }
-
-                    await _options.OnTaskEnd(task).ConfigureAwait(false);
-                }
-            }
-            catch (Exception e)
-            {
-                var tra = db.CreateTransaction();
-#pragma warning disable CS4014
-                tra.ListRemoveAsync(Prefix($"{task.Queue}:checkout"), task.TaskId, flags: CommandFlags.FireAndForget);
-                tra.ListLeftPushAsync(Prefix(task.Queue), task.TaskId, flags: CommandFlags.FireAndForget);
-                tra.SortedSetRemoveAsync(Prefix($"{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
-                
-                // thats ok even for continuations
-                tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
-                    (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
-#pragma warning restore CS4014
-                await tra.ExecuteAsync().ConfigureAwait(false);
-            }
-            finally
-            {
-                _tasks.TryRemove(task.TaskId, out _);
-            }
-        }
-
-
-        // poll next task now
-        if (!_shutdown.IsCancellationRequested)
-            await FetchAsync();
-    }
-
     #region Stats
+
     public async Task<BatchInfo> GetBatch(string batchId)
     {
         var db = _redis.GetDatabase();
@@ -727,7 +871,7 @@ end
         foreach (var q in _queues)
             list.Add(new QueueInfo
             {
-                Name = UnPrefix(q!),
+                Name = UnPrefix(q!).Replace("queue:", string.Empty),
                 Length = await db.ListLengthAsync(q),
                 Checkout = await db.SortedSetLengthAsync($"{q}:checkout")
             });
@@ -742,8 +886,8 @@ end
         return new QueueInfo
         {
             Name = name,
-            Length = await db.ListLengthAsync(Prefix(name)),
-            Checkout = await db.SortedSetLengthAsync(Prefix($"{name}:checkout"))
+            Length = await db.ListLengthAsync(Prefix($"queue:{name}")),
+            Checkout = await db.SortedSetLengthAsync(Prefix($"queue:{name}:checkout"))
         };
     }
 
@@ -751,21 +895,21 @@ end
     {
         var db = _redis.GetDatabase();
 
-        var jobIds = await db.ListRangeAsync(Prefix(queue), skip, skip + take,
+        var taskIds = await db.ListRangeAsync(Prefix(queue), skip, skip + take,
             CommandFlags.PreferReplica).ConfigureAwait(false);
 
-        var list = new List<TaskData>(jobIds.Length);
-        foreach (var jobId in jobIds)
+        var list = new List<TaskData>(taskIds.Length);
+        foreach (var taskId in taskIds)
         {
-            var hashValues = await db.HashGetAllAsync(Prefix($"task:{jobId}"), CommandFlags.PreferReplica)
+            var hashValues = await db.HashGetAllAsync(Prefix($"task:{taskId}"), CommandFlags.PreferReplica)
                 .ConfigureAwait(false);
-            var jobData = hashValues.ToDictionary();
+            var taskData = hashValues.ToDictionary();
 
             list.Add(new TaskData
             {
-                Topic = jobData["topic"],
-                TaskId = jobId,
-                Tenant = jobData["tenant"],
+                Topic = taskData["topic"]!,
+                TaskId = taskId!,
+                Tenant = taskData["tenant"]!,
                 Data = null!
             });
         }
@@ -802,34 +946,4 @@ end
     }
 
     #endregion
-
-    public async Task CleanUp()
-    {
-        var db = _redis.GetDatabase();
-
-        await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
-local t = redis.call('time')[1];
-
-for i, v in ipairs(KEYS) do
-  local r = redis.call('zrange', v.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
-  for j, w in ipairs(r) do
-    redis.call('lpush', v, w);
-    redis.call('zrem', v.."":pushback"", w);
-    redis.call('lrem', v.."":checkout"", 0, w);
-  end;
-end;
-
-local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
-for k, batchId in ipairs(batches) do
-  local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
-  redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
-  redis.call('zrem', ""{Prefix("batches:")}""..tenant, batchId);
-  redis.call('del', ""{Prefix("batch:")}""..batchId);
-end;
-", _queues);
-    }
 }

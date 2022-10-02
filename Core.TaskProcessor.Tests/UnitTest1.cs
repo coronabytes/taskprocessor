@@ -1,30 +1,34 @@
-using Core.TaskProcessor;
 using Newtonsoft.Json;
+using Xunit;
 using Xunit.Abstractions;
 
-namespace Core.BatchOrchestrator.Tests;
+namespace Core.TaskProcessor.Tests;
 
 public class UnitTest1
 {
     private readonly ITestOutputHelper _output;
-    private readonly TaskProcessor.TaskProcessor _processor;
+    private readonly TaskProcessor _processor;
 
     public UnitTest1(ITestOutputHelper output)
     {
         _output = output;
-        _processor = new TaskProcessor.TaskProcessor(new TaskProcessorOptions
+        _processor = new TaskProcessor(new TaskProcessorOptions
         {
-            Prefix = "dev",
+            Prefix = "{dev}",
             MaxWorkers = 4,
             Queues = new[] { "q1", "q2", "q3" },
             Redis = "localhost:6379,abortConnect=false",
-            OnTaskStart = async info =>
+            Retries = 3,
+            Deadletter = true,
+            OnTaskStart = info =>
             {
                 _output.WriteLine($"End: {info.Queue} {info.BatchId} {info.TaskId}");
+                return Task.CompletedTask;
             },
-            OnTaskEnd = async info =>
+            OnTaskEnd = info =>
             {
                 _output.WriteLine($"End: {info.Queue} {info.BatchId} {info.TaskId}");
+                return Task.CompletedTask;
             }
         })
         {
@@ -32,6 +36,7 @@ public class UnitTest1
             {
                 //await info.ExtendLockAsync(TimeSpan.FromMinutes(5));
                 _output.WriteLine($"Process: {info.Queue} {info.BatchId} {info.TaskId}");
+                throw new Exception("error");
                 await Task.Delay(500, info.Cancel.Token);
             }
         };
@@ -55,38 +60,28 @@ public class UnitTest1
             new()
             {
                 TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-            new()
-            {
-                TaskId = Guid.NewGuid().ToString("D")
-            },
-        }, continuations: new List<TaskData>
+            }
+        }, new List<TaskData>
         {
             new()
             {
-                Topic = "continue",
-                TaskId = Guid.NewGuid().ToString("D")
+                Topic = "c1",
+                TaskId = Guid.NewGuid().ToString("D"),
+                Queue = "q1"
             },
+            new()
+            {
+                Topic = "c2",
+                TaskId = Guid.NewGuid().ToString("D"),
+                Queue = "q3"
+            }
         });
 
         var batches = await _processor.GetBatchesAsync("1001");
         _output.WriteLine(JsonConvert.SerializeObject(batches, Formatting.Indented));
+
+        var queues = await _processor.GetQueuesAsync();
+        _output.WriteLine(JsonConvert.SerializeObject(queues, Formatting.Indented));
     }
 
 
@@ -115,7 +110,8 @@ public class UnitTest1
     [Fact]
     public async Task Schedule()
     {
-        await _processor.UpsertScheduleAsync("123", "1001", "Fetch Emails", "email", new byte[] {}, "q1", "*/2 * * * *", "Europe/Berlin");
+        await _processor.UpsertScheduleAsync("123", "1001", "Fetch Emails", "email", new byte[] { }, "q1",
+            "*/2 * * * *", "Europe/Berlin");
     }
 
     [Fact]

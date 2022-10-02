@@ -3,34 +3,48 @@ namespace Core.TaskProcessor;
 public class TaskProcessorOptions
 {
     /// <summary>
-    ///   Redis prefix for all keys and channels
+    ///    redis prefix for all keys and channels
     /// </summary>
     public string Prefix { get; set; } = string.Empty;
 
     /// <summary>
-    ///   Queues to listen for, order determines priority
+    ///     queues to listen for, order determines priority
     /// </summary>
     public string[] Queues { get; set; } = { "default" };
 
     /// <summary>
-    ///   Max concurrent work on all queues
+    ///     max concurrent work on all queues for this instance
     /// </summary>
     public int MaxWorkers { get; set; } = Environment.ProcessorCount;
 
     /// <summary>
-    ///   How frequent to poll when no work available
+    ///     how frequent to poll when no work available
+    ///     also schedule / cleanup
     /// </summary>
     public TimeSpan PollFrequency { get; set; } = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    ///   how long batches are kept
+    /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromDays(14);
+
+    /// <summary>
+    ///   if tasks failed this many times they will be discarded or deadlettered
+    /// </summary>
     public int Retries { get; set; } = 3;
 
     /// <summary>
-    ///   Deduplication window
+    ///   when retries exhausted move to deadletter list instead of discard
+    /// </summary>
+    public bool Deadletter { get; set; } = true;
+
+    /// <summary>
+    ///     deduplication window
     /// </summary>
     public TimeSpan Invisibility { get; set; } = TimeSpan.FromMinutes(5);
 
     public Func<TaskContext, Task> OnTaskStart { get; set; } = _ => Task.CompletedTask;
     public Func<TaskContext, Task> OnTaskEnd { get; set; } = _ => Task.CompletedTask;
 
-    public string Redis { get; set; }
+    public string Redis { get; set; } = string.Empty;
 }
