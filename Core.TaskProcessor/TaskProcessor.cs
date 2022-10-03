@@ -444,8 +444,6 @@ end
                 }
                 else
                 {
-                    var bla = task.Queue;
-                    var topic = task.Topic;
                     await _options.OnTaskStart(task).ConfigureAwait(false);
 
                     await Execute(task).ConfigureAwait(false);
