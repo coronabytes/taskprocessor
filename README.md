@@ -17,7 +17,7 @@
 ## Initialization
 
 ```csharp
-_processor = new TaskProcessor(new TaskProcessorOptions
+var proc = new TaskProcessor(new TaskProcessorOptions
 {
     Prefix = "{dev}",
     MaxWorkers = 4,
@@ -40,4 +40,83 @@ _processor = new TaskProcessor(new TaskProcessorOptions
         await Task.Delay(500, info.Cancel.Token);
     }
 };
+```
+
+## Enqueue batch tasks
+
+```csharp
+var batchId = await proc.EnqueueBatchAsync("low", "my-tenant",  new List<TaskData>
+{
+    new()
+    {
+        Topic = "send-email",
+        Data = Encoding.UTF8.GetBytes("Reasonably small payload")
+    },
+    new()
+    {
+        Topic = "send-email"
+    },
+}, new List<TaskData>
+{
+    new()
+    {
+        Topic = "all-emails-send",
+        Queue = "high"
+    }
+});
+```
+
+## Schedule tasks
+
+```csharp
+await proc.UpsertScheduleAsync(new ScheduleData
+{
+    ScheduleId = "unique-schedule-id",
+    Tenant = "my-tenant",
+    Scope = "Send hourly email",
+    Cron = "0 */1 * * *",
+    Timezone = "Etc/UTC",
+    Unique = true // if task hasn't completed yet - do not schedule again
+}, new TaskData
+{
+    Topic = "send-email",
+    Data = Encoding.UTF8.GetBytes("Reasonably small payload")
+    Queue = "low",
+    Retries = 3
+});
+```
+
+## Service Worker / AspNetCore
+
+```csharp
+
+builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcessorOptions
+{
+  ...
+}));
+
+public class TaskService : BackgroundService
+{
+    private readonly ITaskProcessor _processor;
+    private readonly IServiceProvider _serviceProvider;
+
+    public TaskService(ITaskProcessor processor, IServiceProvider serviceProvider)
+    {
+        _processor = processor;
+        _serviceProvider = serviceProvider;
+
+        processor.Execute = Execute;
+    }
+
+    private async Task Execute(TaskContext ctx)
+    {
+        await using var scope = _serviceProvider.CreateAsyncScope();
+        // TODO: Do something on scope
+        await Task.Delay(1000, ctx.Cancel.Token);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await _processor.RunAsync(stoppingToken);
+    }
 ```
