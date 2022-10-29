@@ -1,3 +1,6 @@
+[![Nuget](https://img.shields.io/nuget/v/Core.TaskProcessor)](https://www.nuget.org/packages/Core.TaskProcessor)
+[![Nuget](https://img.shields.io/nuget/dt/Core.TaskProcessor)](https://www.nuget.org/packages/Core.TaskProcessor)
+
 # .NET Background Task Processing Engine
 *Hangfire Pro Redis* except:
 - way less features
