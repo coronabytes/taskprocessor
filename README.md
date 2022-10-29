@@ -9,7 +9,7 @@ dotnet add package Core.TaskProcessor
 *Hangfire Pro Redis* except:
 - way less features
 - open source (Apache 2.0)
-- redis 6+ storage engine (cluster mode with hash slot per prefix)
+- redis/elasticache 6+ storage engine (cluster mode with hash slot per prefix)
 - low level api (bring your own serialization / ui)
 - multi tenancy
 - global pause and resume of all processing
@@ -72,6 +72,18 @@ var batchId = await proc.EnqueueBatchAsync("low", "my-tenant",  new List<TaskDat
 });
 ```
 
+## Append tasks to batch (warning: continuations will run only once)
+
+```csharp
+_processor.AppendBatchAsync("low", "my-tenant", batchId, new List<TaskData>
+{
+    new()
+    {
+        Topic = "send-another-email"
+    }
+});
+```
+
 ## Cancel batch
 ```csharp
 await proc.CancelBatchAsync(batchId);
@@ -100,6 +112,12 @@ await proc.UpsertScheduleAsync(new ScheduleData
 ## Cancel schedule
 ```csharp
 await proc.CancelScheduleAsync("unique-schedule-id", "my-tenant");
+```
+
+## Get runtime infos
+```csharp
+await proc.GetBatchesAsync("my-tenant", 0, 25);
+await proc.GetTasksInQueueAsync("low", 0, 25);
 ```
 
 ## Service Worker / AspNetCore
