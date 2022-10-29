@@ -4,6 +4,7 @@ public class TaskProcessorOptions
 {
     /// <summary>
     ///    redis prefix for all keys and channels
+    ///    cluster mode requires hash notation e.g. {taskproc-1}
     /// </summary>
     public string Prefix { get; set; } = string.Empty;
 
@@ -34,7 +35,7 @@ public class TaskProcessorOptions
     public int Retries { get; set; } = 3;
 
     /// <summary>
-    ///   when retries exhausted move to deadletter list instead of discard
+    ///   when retries are exhausted move to deadletter list instead of discard
     /// </summary>
     public bool Deadletter { get; set; } = true;
 
