@@ -19,11 +19,13 @@
 ```csharp
 var proc = new TaskProcessor(new TaskProcessorOptions
 {
-    Prefix = "{dev}",
+    Prefix = "{dev}", // redis cluster mode needs single hash slot
     MaxWorkers = 4,
-    Queues = new[] { "high", "low" },
+    Queues = new[] { "high", "low" }, // pop queues from left to right - first non empty queue wins
     Redis = "localhost:6379,abortConnect=false",
     Retries = 3,
+    Retention = TimeSpan.FromDays(14), // batch information will be kept this long
+    Invisibility = TimeSpan.FromMinutes(5), // task will be redelivered when taking longer than this
     OnTaskStart = info =>
     {
         return Task.CompletedTask;
@@ -66,6 +68,11 @@ var batchId = await proc.EnqueueBatchAsync("low", "my-tenant",  new List<TaskDat
 });
 ```
 
+## Cancel batch
+```csharp
+await proc.CancelBatchAsync(batchId);
+```
+
 ## Schedule tasks
 
 ```csharp
@@ -86,14 +93,20 @@ await proc.UpsertScheduleAsync(new ScheduleData
 });
 ```
 
+## Cancel schedule
+```csharp
+await proc.CancelScheduleAsync("unique-schedule-id", "my-tenant");
+```
+
 ## Service Worker / AspNetCore
 
 ```csharp
 
 builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcessorOptions
 {
-  ...
+  // ...
 }));
+builder.Services.AddHostedService<TaskService>();
 
 public class TaskService : BackgroundService
 {
@@ -119,4 +132,8 @@ public class TaskService : BackgroundService
     {
         await _processor.RunAsync(stoppingToken);
     }
+}
 ```
+
+
+
