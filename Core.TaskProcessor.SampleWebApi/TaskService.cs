@@ -1,29 +1,28 @@
-﻿namespace Core.TaskProcessor.SampleWebApi
+﻿namespace Core.TaskProcessor.SampleWebApi;
+
+public class TaskService : BackgroundService
 {
-    public class TaskService : BackgroundService
+    private readonly ITaskProcessor _processor;
+    private readonly IServiceProvider _serviceProvider;
+
+    public TaskService(ITaskProcessor processor, IServiceProvider serviceProvider)
     {
-        private readonly ITaskProcessor _processor;
-        private readonly IServiceProvider _serviceProvider;
+        _processor = processor;
+        _serviceProvider = serviceProvider;
 
-        public TaskService(ITaskProcessor processor, IServiceProvider serviceProvider)
-        {
-            _processor = processor;
-            _serviceProvider = serviceProvider;
+        processor.Execute = Execute;
+    }
 
-            processor.Execute = Execute;
-        }
+    private async Task Execute(TaskContext ctx)
+    {
+        await using var scope = _serviceProvider.CreateAsyncScope();
 
-        private async Task Execute(TaskContext ctx)
-        {
-            await using var scope = _serviceProvider.CreateAsyncScope();
+        await Task.Delay(1000, ctx.Cancel.Token);
+    }
 
-            await Task.Delay(1000, ctx.Cancel.Token);
-        }
-
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-        {
-            await _processor.Resume();
-            await _processor.RunAsync(stoppingToken);
-        }
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await _processor.ResumeAsync();
+        await _processor.RunAsync(stoppingToken);
     }
 }

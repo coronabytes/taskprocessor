@@ -7,5 +7,5 @@ public class ScheduleData
     public string Scope { get; set; } = string.Empty;
     public string Cron { get; set; } = string.Empty;
     public string? Timezone { get; set; }
-    public bool Unique { get; set; } 
+    public bool Unique { get; set; }
 }

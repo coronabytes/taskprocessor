@@ -10,7 +10,7 @@ builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcesso
 {
     Redis = "localhost:6379,abortConnect=false",
     Prefix = "{core}",
-    Queues = new []{ "high", "default" },
+    Queues = new[] { "high", "default" },
     MaxWorkers = 4,
     Retries = 3,
     Invisibility = TimeSpan.FromMinutes(5),

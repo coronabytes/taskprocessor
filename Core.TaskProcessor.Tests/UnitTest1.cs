@@ -45,12 +45,12 @@ public class UnitTest1
     [Fact]
     public async Task Enqueue()
     {
-        var batchId = await _processor.EnqueueBatchAsync("q2", "1001",  new List<TaskData>
+        var batchId = await _processor.EnqueueBatchAsync("q2", "1001", new List<TaskData>
         {
             new()
             {
                 Topic = "t1"
-            },
+            }
             //new(),
             //new()
         }, new List<TaskData>
@@ -68,7 +68,6 @@ public class UnitTest1
         });
 
         _output.WriteLine($"Batch: {batchId}");
-
     }
 
 
@@ -89,7 +88,7 @@ public class UnitTest1
     [Fact]
     public async Task Run()
     {
-        await _processor.Resume();
+        await _processor.ResumeAsync();
 
         var t = _processor.RunAsync(CancellationToken.None);
 
@@ -117,24 +116,24 @@ public class UnitTest1
             Topic = "email",
             Queue = "q1",
             Data = new byte[] { },
-            Retries = 3,
+            Retries = 3
         });
     }
 
     [Fact]
     public async Task ExecuteSchedules()
     {
-        var run = await _processor.ExecuteSchedules();
+        var run = await _processor.ExecuteSchedulesAsync();
 
         _output.WriteLine($"Run: {run}");
 
-        var schedules = await _processor.GetSchedules("1001");
+        var schedules = await _processor.GetSchedulesAsync("1001");
         _output.WriteLine(JsonConvert.SerializeObject(schedules, Formatting.Indented));
     }
 
     [Fact]
     public async Task Cleanup()
     {
-        await _processor.CleanUp();
+        await _processor.CleanUpAsync();
     }
 }

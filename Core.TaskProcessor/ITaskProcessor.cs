@@ -12,12 +12,12 @@ public interface ITaskProcessor
     /// <summary>
     ///     globally pauses all task and schedule processing
     /// </summary>
-    Task Pause();
+    Task PauseAsync();
 
     /// <summary>
     ///     globally resumes all task and schedule processing
     /// </summary>
-    Task Resume();
+    Task ResumeAsync();
 
     /// <summary>
     ///     enqueue a batch of tasks with optional continuation tasks
@@ -54,9 +54,14 @@ public interface ITaskProcessor
     Task StopAsync();
 
     /// <summary>
-    ///     main loop
+    ///     main loop (fetch, schedule, cleanup)
     /// </summary>
     Task RunAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    ///     get batch info
+    /// </summary>
+    Task<BatchInfo?> GetBatchAsync(string batchId);
 
     /// <summary>
     ///     list batches for tenant with paging support
@@ -66,7 +71,7 @@ public interface ITaskProcessor
     /// <summary>
     ///     list schedules for tenant with paging support
     /// </summary>
-    Task<ICollection<ScheduleInfo>> GetSchedules(string tenant, long skip = 0, long take = 50);
+    Task<ICollection<ScheduleInfo>> GetSchedulesAsync(string tenant, long skip = 0, long take = 50);
 
     /// <summary>
     ///     List tasks in queue with paging support
@@ -74,12 +79,22 @@ public interface ITaskProcessor
     Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50);
 
     /// <summary>
+    ///     Queue Stats
+    /// </summary>
+    Task<QueueInfo> GetQueueAsync(string name);
+
+    /// <summary>
+    ///     List queue stats (only queues configured for this instance)
+    /// </summary>
+    Task<ICollection<QueueInfo>> GetQueuesAsync();
+
+    /// <summary>
     ///     create or update schedule
     /// </summary>
     Task UpsertScheduleAsync(ScheduleData schedule, TaskData task);
 
     /// <summary>
-    ///   execute schedule without affecting next execution
+    ///     execute schedule without affecting next execution
     /// </summary>
     /// <returns>true when task queued</returns>
     Task<bool> TriggerScheduleAsync(string id);
@@ -94,4 +109,25 @@ public interface ITaskProcessor
     ///     prolong checkout time
     /// </summary>
     Task<bool> ExtendLockAsync(string queue, string taskId, TimeSpan span);
+
+    /// <summary>
+    ///     batch count for tenant
+    /// </summary>
+    Task<long> GetBatchesCountAsync(string tenant);
+
+    /// <summary>
+    ///     schedule count for tenant
+    /// </summary>
+    Task<long> GetSchedulesCountAsync(string tenant);
+
+    /// <summary>
+    ///     manually push up to 100 scheduled tasks
+    /// </summary>
+    /// <returns>actual pushed tasks</returns>
+    Task<int> ExecuteSchedulesAsync();
+
+    /// <summary>
+    ///     manually cleanup batches exceeding retention
+    /// </summary>
+    Task CleanUpAsync();
 }

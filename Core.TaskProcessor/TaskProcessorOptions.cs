@@ -3,8 +3,8 @@ namespace Core.TaskProcessor;
 public class TaskProcessorOptions
 {
     /// <summary>
-    ///    redis prefix for all keys and channels
-    ///    cluster mode requires hash notation e.g. {taskproc-1}
+    ///     redis prefix for all keys and channels
+    ///     cluster mode requires hash notation e.g. {taskproc-1}
     /// </summary>
     public string Prefix { get; set; } = string.Empty;
 
@@ -25,17 +25,17 @@ public class TaskProcessorOptions
     public TimeSpan PollFrequency { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    ///   how long batches are kept
+    ///     how long batches are kept
     /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromDays(14);
 
     /// <summary>
-    ///   if tasks failed this many times they will be discarded or deadlettered
+    ///     if tasks failed this many times they will be discarded or deadlettered
     /// </summary>
     public int Retries { get; set; } = 3;
 
     /// <summary>
-    ///   when retries are exhausted move to deadletter list instead of discard
+    ///     when retries are exhausted move to deadletter list instead of discard
     /// </summary>
     public bool Deadletter { get; set; } = true;
 

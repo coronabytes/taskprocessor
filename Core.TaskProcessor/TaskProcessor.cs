@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.ComponentModel;
 using System.Threading.Tasks.Dataflow;
 using Cronos;
 using StackExchange.Redis;
@@ -241,7 +240,7 @@ end
         var q = (string)r[0]!;
         var j = (string)r[1]!;
         var taskData = r[2].ToDictionary();
-        
+
         var isContinuation = taskData.ContainsKey("continuation");
         var isScheduled = taskData.ContainsKey("schedule");
         var isBatch = taskData.ContainsKey("batch");
@@ -288,7 +287,7 @@ end
                     ScheduleId = null
                 });
             }
-        } 
+        }
         else if (isScheduled)
         {
             var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
@@ -347,8 +346,8 @@ end
                 gotWork = await FetchAsync();
             } while (_actionBlock.InputCount < _options.MaxWorkers && gotWork);
 
-            await ExecuteSchedules();
-            await CleanUp();
+            await ExecuteSchedulesAsync();
+            await CleanUpAsync();
 
             await Task.Delay(_options.PollFrequency, cancel).ContinueWith(_ => { });
         }
@@ -359,6 +358,37 @@ end
         var db = _redis.GetDatabase();
         return db.SortedSetUpdateAsync(Prefix($"queue:{queue}:pushback"), taskId,
             DateTimeOffset.UtcNow.Add(span).ToUnixTimeSeconds());
+    }
+
+    public async Task CleanUpAsync()
+    {
+        var db = _redis.GetDatabase();
+
+        await db.ScriptEvaluateAsync($@"
+if redis.replicate_commands~=nil then 
+  redis.replicate_commands() 
+end
+
+local t = redis.call('time')[1];
+
+for i, v in ipairs(KEYS) do
+  local r = redis.call('zrange', v.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+  for j, w in ipairs(r) do
+    redis.call('lpush', v, w);
+    redis.call('zrem', v.."":pushback"", w);
+    redis.call('lrem', v.."":checkout"", 0, w);
+  end;
+end;
+
+local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+for k, batchId in ipairs(batches) do
+  local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
+  redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
+  redis.call('zrem', ""{Prefix("batches:")}""..tenant, batchId);
+  redis.call('del', ""{Prefix("batch:")}""..batchId);
+  redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
+end;
+", _queues);
     }
 
     private string Prefix(string s)
@@ -422,7 +452,8 @@ end
 #pragma warning disable CS4014
                     tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId,
                         flags: CommandFlags.FireAndForget);
-                    tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
+                    tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
+                        CommandFlags.FireAndForget);
 
                     if (!task.IsContinuation)
                     {
@@ -431,10 +462,10 @@ end
                         remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
 
                         if (_options.Deadletter)
-                            tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+                            tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId,
+                                DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                         else
                             tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
-
                     }
 #pragma warning restore CS4014
                     await tra.ExecuteAsync().ConfigureAwait(false);
@@ -480,15 +511,15 @@ end
             {
                 var tra = db.CreateTransaction();
 #pragma warning disable CS4014
-                tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId, flags: CommandFlags.FireAndForget);
+                tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId,
+                    flags: CommandFlags.FireAndForget);
                 tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId, flags: CommandFlags.FireAndForget);
-                tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, CommandFlags.FireAndForget);
+                tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
+                    CommandFlags.FireAndForget);
 
                 if (!task.IsContinuation)
-                {
                     tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                         (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
-                }
 #pragma warning restore CS4014
                 await tra.ExecuteAsync().ConfigureAwait(false);
             }
@@ -530,37 +561,6 @@ end;
 ", new RedisKey[] { Prefix($"batch:{task.BatchId}:continuations") });
 #pragma warning restore CS4014
         await tra2.ExecuteAsync().ConfigureAwait(false);
-    }
-
-    public async Task CleanUp()
-    {
-        var db = _redis.GetDatabase();
-
-        await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
-local t = redis.call('time')[1];
-
-for i, v in ipairs(KEYS) do
-  local r = redis.call('zrange', v.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
-  for j, w in ipairs(r) do
-    redis.call('lpush', v, w);
-    redis.call('zrem', v.."":pushback"", w);
-    redis.call('lrem', v.."":checkout"", 0, w);
-  end;
-end;
-
-local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
-for k, batchId in ipairs(batches) do
-  local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
-  redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
-  redis.call('zrem', ""{Prefix("batches:")}""..tenant, batchId);
-  redis.call('del', ""{Prefix("batch:")}""..batchId);
-  redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
-end;
-", _queues);
     }
 
     public async Task<long> RequeueDeadletterAsync(string queue, int? retries = null, long? count = null)
@@ -626,13 +626,13 @@ return #(taskIds);
 
     public bool IsPaused { get; private set; } = true;
 
-    public async Task Pause()
+    public async Task PauseAsync()
     {
         await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 0);
         await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), false);
     }
 
-    public async Task Resume()
+    public async Task ResumeAsync()
     {
         await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 1);
         await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), true);
@@ -712,7 +712,7 @@ return #(taskIds);
     private async Task<ScheduleInfo?> TriggerScheduleInternal(string id, IDatabase db, ITransaction tra)
     {
         var data = (await db.HashGetAllAsync(Prefix($"schedule:{id}"))).ToDictionary(x => x.Name,
-                        x => x.Value);
+            x => x.Value);
 
         if (data.Count == 0)
             return null;
@@ -755,7 +755,7 @@ return #(taskIds);
     }
 
     // Not Cluster safe / schedules + schedule:on same shard?
-    public async Task<int> ExecuteSchedules()
+    public async Task<int> ExecuteSchedulesAsync()
     {
         var db = _redis.GetDatabase();
 
@@ -768,7 +768,7 @@ return #(taskIds);
         try
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            
+
             var tasks = await db.SortedSetRangeByScoreAsync(Prefix("schedules"), 0, now, take: 100)
                 .ConfigureAwait(false);
 
@@ -800,8 +800,10 @@ return #(taskIds);
 #pragma warning disable CS4014
                         if (next.HasValue)
                         {
-                            tra.HashSetAsync(Prefix($"schedule:{id}"), "next", next.Value.ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
-                            tra.SortedSetAddAsync(Prefix("schedules"), id, next.Value.ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
+                            tra.HashSetAsync(Prefix($"schedule:{id}"), "next", next.Value.ToUnixTimeSeconds(),
+                                flags: CommandFlags.FireAndForget);
+                            tra.SortedSetAddAsync(Prefix("schedules"), id, next.Value.ToUnixTimeSeconds(),
+                                CommandFlags.FireAndForget);
                         }
                         else
                         {
@@ -863,14 +865,14 @@ return #(taskIds);
     #region Stats
 
     // Cluster safe
-    public async Task<BatchInfo> GetBatch(string batchId)
+    public async Task<BatchInfo?> GetBatchAsync(string batchId)
     {
         var db = _redis.GetDatabase();
 
         var res = await db.HashGetAllAsync(Prefix($"batch:{batchId}")).ConfigureAwait(false);
 
         if (res.Length == 0)
-            return new BatchInfo();
+            return null;
 
         var batch = res.ToDictionary();
 
@@ -898,7 +900,8 @@ return #(taskIds);
         var db = _redis.GetDatabase();
 
         var list = new List<BatchInfo>();
-        var sids = db.SortedSetRangeByScore(Prefix($"batches:{tenant}"), skip: skip, take: take, flags: CommandFlags.PreferReplica);
+        var sids = db.SortedSetRangeByScore(Prefix($"batches:{tenant}"), skip: skip, take: take,
+            flags: CommandFlags.PreferReplica);
 
         var res = new List<Task<HashEntry[]>>();
 
@@ -928,6 +931,12 @@ return #(taskIds);
         }
 
         return list;
+    }
+
+    public async Task<long> GetBatchesCountAsync(string tenant)
+    {
+        var db = _redis.GetDatabase();
+        return await db.SortedSetLengthAsync(Prefix($"batches:{tenant}")).ConfigureAwait(false);
     }
 
     // Cluster safe
@@ -983,7 +992,7 @@ return #(taskIds);
                 TaskId = taskId!,
                 Tenant = taskData["tenant"]!,
                 Retries = (int)taskData["retries"]!,
-                Data = taskData["data"]!,
+                Data = taskData["data"]!
             });
         }
 
@@ -991,12 +1000,12 @@ return #(taskIds);
     }
 
     // Cluster safe
-    public async Task<ICollection<ScheduleInfo>> GetSchedules(string tenant, long skip = 0, long take = 50)
+    public async Task<ICollection<ScheduleInfo>> GetSchedulesAsync(string tenant, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
 
         var list = new List<ScheduleInfo>();
-        var sids = await db.SortedSetRangeByScoreAsync(Prefix($"schedules:{tenant}"), skip: skip, take: take, 
+        var sids = await db.SortedSetRangeByScoreAsync(Prefix($"schedules:{tenant}"), skip: skip, take: take,
             flags: CommandFlags.PreferReplica).ConfigureAwait(false);
 
         var res = new List<Task<HashEntry[]>>();
@@ -1011,14 +1020,20 @@ return #(taskIds);
             var schedule = scheduleResult.Result.ToDictionary();
             list.Add(new ScheduleInfo
             {
-                Scope = (string)schedule["scope"]!,
-                Cron = (string)schedule["cron"]!,
-                Timezone = (string)schedule["timezone"]!,
+                Scope = schedule["scope"]!,
+                Cron = schedule["cron"]!,
+                Timezone = schedule["timezone"]!,
                 Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime
             });
         }
 
         return list;
+    }
+
+    public async Task<long> GetSchedulesCountAsync(string tenant)
+    {
+        var db = _redis.GetDatabase();
+        return await db.SortedSetLengthAsync(Prefix($"schedules:{tenant}")).ConfigureAwait(false);
     }
 
     #endregion
