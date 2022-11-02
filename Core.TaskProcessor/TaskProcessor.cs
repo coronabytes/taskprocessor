@@ -213,9 +213,11 @@ public class TaskProcessor : ITaskProcessor
         if (IsPaused)
             return false;
 
-        var db = _redis.GetDatabase();
+        try
+        {
+            var db = _redis.GetDatabase();
 
-        var res = await db.ScriptEvaluateAsync($@"
+            var res = await db.ScriptEvaluateAsync($@"
 if redis.replicate_commands~=nil then 
   redis.replicate_commands() 
 end
@@ -227,92 +229,102 @@ if taskId then
   redis.call('zadd', queue.."":pushback"", invis, taskId);
   local taskData = redis.call('hgetall', ""{Prefix("task:")}""..taskId);
   local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
-  local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
-  return {{queue, taskId, taskData, batchData}}; 
+
+  if batchId then
+    local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
+    return {{queue, taskId, taskData, batchData}}; 
+  end;
+
+  return {{queue, taskId, taskData}}; 
 end;
 end
 ", _queues, new RedisValue[] { (long)_options.Retention.TotalSeconds });
 
-        if (res.IsNull)
-            return false;
+            if (res.IsNull)
+                return false;
 
-        var r = (RedisResult[])res!;
-        var q = (string)r[0]!;
-        var j = (string)r[1]!;
-        var taskData = r[2].ToDictionary();
+            var r = (RedisResult[])res!;
+            var q = (string)r[0]!;
+            var j = (string)r[1]!;
+            var taskData = r[2].ToDictionary();
 
-        var isContinuation = taskData.ContainsKey("continuation");
-        var isScheduled = taskData.ContainsKey("schedule");
-        var isBatch = taskData.ContainsKey("batch");
+            var isContinuation = taskData.ContainsKey("continuation");
+            var isScheduled = taskData.ContainsKey("schedule");
+            var isBatch = taskData.ContainsKey("batch");
 
-        if (isBatch)
-        {
-            var batchData = r[3].ToDictionary();
-            var state = (string)batchData["state"]!;
-
-            if (state == "go" || (isContinuation && state == "done"))
+            if (isBatch)
             {
-                var cts = new CancellationTokenSource();
-                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _shutdown.Token);
+                var batchData = r[3].ToDictionary();
+                var state = (string)batchData["state"]!;
+
+                if (state == "go" || (isContinuation && state == "done"))
+                {
+                    var cts = new CancellationTokenSource();
+                    var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token, _shutdown.Token);
+
+                    var info = new TaskContext
+                    {
+                        Processor = this,
+                        TaskId = j,
+                        BatchId = (string)taskData["batch"]!,
+                        Tenant = (string)taskData["tenant"]!,
+                        Queue = (string?)taskData["queue"],
+                        Cancel = linkedCts,
+                        Topic = (string?)taskData["topic"] ?? string.Empty,
+                        Data = (byte[])taskData["data"]!,
+                        IsContinuation = isContinuation,
+                        IsCancellation = false,
+                        Retries = (int?)taskData["retries"],
+                        ScheduleId = null
+                    };
+
+                    _tasks.TryAdd(info.TaskId, info);
+                    _actionBlock.Post(info);
+                }
+                else if (state == "canceled")
+                {
+                    _actionBlock.Post(new TaskContext
+                    {
+                        Processor = this,
+                        TaskId = j,
+                        BatchId = (string)taskData["batch"]!,
+                        IsCancellation = true,
+                        IsContinuation = isContinuation,
+                        Queue = q,
+                        ScheduleId = null
+                    });
+                }
+            }
+            else if (isScheduled)
+            {
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
 
                 var info = new TaskContext
                 {
                     Processor = this,
                     TaskId = j,
-                    BatchId = (string)taskData["batch"]!,
+                    ScheduleId = (string)taskData["schedule"]!,
                     Tenant = (string)taskData["tenant"]!,
                     Queue = (string?)taskData["queue"],
                     Cancel = linkedCts,
                     Topic = (string?)taskData["topic"] ?? string.Empty,
                     Data = (byte[])taskData["data"]!,
-                    IsContinuation = isContinuation,
-                    IsCancellation = false,
+                    BatchId = null,
                     Retries = (int?)taskData["retries"],
-                    ScheduleId = null
+                    IsCancellation = false,
+                    IsContinuation = false
                 };
 
                 _tasks.TryAdd(info.TaskId, info);
                 _actionBlock.Post(info);
             }
-            else if (state == "canceled")
-            {
-                _actionBlock.Post(new TaskContext
-                {
-                    Processor = this,
-                    TaskId = j,
-                    BatchId = (string)taskData["batch"]!,
-                    IsCancellation = true,
-                    IsContinuation = isContinuation,
-                    Queue = q,
-                    ScheduleId = null
-                });
-            }
+
+            return true;
         }
-        else if (isScheduled)
+        catch (Exception e)
         {
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
-
-            var info = new TaskContext
-            {
-                Processor = this,
-                TaskId = j,
-                ScheduleId = (string)taskData["schedule"]!,
-                Tenant = (string)taskData["tenant"]!,
-                Queue = (string?)taskData["queue"],
-                Cancel = linkedCts,
-                Topic = (string?)taskData["topic"] ?? string.Empty,
-                Data = (byte[])taskData["data"]!,
-                BatchId = null,
-                Retries = (int?)taskData["retries"],
-                IsCancellation = false,
-                IsContinuation = false
-            };
-
-            _tasks.TryAdd(info.TaskId, info);
-            _actionBlock.Post(info);
+            return false;
         }
-
-        return true;
     }
 
     public async Task StopAsync()
@@ -423,8 +435,13 @@ end;
             tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId);
             if (!task.IsContinuation)
             {
-                tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "canceled", flags: CommandFlags.FireAndForget);
-                remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                if (!string.IsNullOrEmpty(task.BatchId))
+                {
+                    tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "canceled",
+                        flags: CommandFlags.FireAndForget);
+                    remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                }
+
                 tra.KeyDeleteAsync(Prefix($"task:{task.TaskId}"), CommandFlags.FireAndForget);
             }
 #pragma warning restore CS4014
@@ -457,9 +474,12 @@ end;
 
                     if (!task.IsContinuation)
                     {
-                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
-                            flags: CommandFlags.FireAndForget);
-                        remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                        if (!string.IsNullOrEmpty(task.BatchId))
+                        {
+                            tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
+                                flags: CommandFlags.FireAndForget);
+                            remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                        }
 
                         if (_options.Deadletter)
                             tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId,
@@ -488,11 +508,14 @@ end;
 
                     if (!task.IsContinuation)
                     {
-                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "done",
-                            flags: CommandFlags.FireAndForget);
-                        remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
-                        tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
-                            (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
+                        if (!string.IsNullOrEmpty(task.BatchId))
+                        {
+                            tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "done",
+                                flags: CommandFlags.FireAndForget);
+                            remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                            tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
+                                (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
+                        }
                     }
 
                     tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId);
@@ -517,7 +540,7 @@ end;
                 tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
                     CommandFlags.FireAndForget);
 
-                if (!task.IsContinuation)
+                if (!task.IsContinuation && string.IsNullOrEmpty(task.BatchId))
                     tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                         (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
 #pragma warning restore CS4014
@@ -537,6 +560,9 @@ end;
 
     private async Task CompleteBatchAsync(TaskContext task, IDatabase db)
     {
+        if (string.IsNullOrEmpty(task.BatchId))
+            return;
+
         var tra2 = db.CreateTransaction();
 #pragma warning disable CS4014
         tra2.AddCondition(Condition.HashEqual(Prefix($"batch:{task.BatchId}"), "remaining", 0));
@@ -653,11 +679,6 @@ return #(taskIds);
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "Etc/UTC");
         var next = (DateTimeOffset?)cronEx.GetNextOccurrence(now, tz);
 
-        // sanity check?
-        if (next.HasValue)
-            if ((next.Value - now).TotalMinutes < 1.0d)
-                throw new ArgumentException("cron minimum of one minute", nameof(schedule.Cron));
-
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
@@ -722,6 +743,7 @@ return #(taskIds);
         data.TryGetValue("next", out var nextOffset);
         data.TryGetValue("queue", out var queue);
         data.TryGetValue("data", out var payload);
+        data.TryGetValue("topic", out var topic);
         data.TryGetValue("unique", out var unique);
         data.TryGetValue("tenant", out var tenant);
         data.TryGetValue("retries", out var retries);
@@ -739,6 +761,7 @@ return #(taskIds);
             new HashEntry("schedule", id),
             new HashEntry("tenant", tenant),
             new HashEntry("data", payload),
+            new HashEntry("topic", topic),
             new HashEntry("queue", queue),
             new HashEntry("retries", retries)
         }, CommandFlags.FireAndForget);

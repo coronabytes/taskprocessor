@@ -121,6 +121,12 @@ public class UnitTest1
     }
 
     [Fact]
+    public async Task TriggerSchedule()
+    {
+        await _processor.TriggerScheduleAsync("123");
+    }
+
+    [Fact]
     public async Task ExecuteSchedules()
     {
         var run = await _processor.ExecuteSchedulesAsync();
