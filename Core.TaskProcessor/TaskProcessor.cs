@@ -1011,7 +1011,7 @@ return #(taskIds);
         var res = new List<Task<HashEntry[]>>();
 
         foreach (var sid in sids)
-            res.Add(db.HashGetAllAsync(Prefix($"schedules:{sid}"), CommandFlags.PreferReplica));
+            res.Add(db.HashGetAllAsync(Prefix($"schedule:{sid}"), CommandFlags.PreferReplica));
 
         await Task.WhenAll(res).ConfigureAwait(false);
 
@@ -1023,7 +1023,8 @@ return #(taskIds);
                 Scope = schedule["scope"]!,
                 Cron = schedule["cron"]!,
                 Timezone = schedule["timezone"]!,
-                Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime
+                Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime,
+                Unique = (bool)schedule["unique"]
             });
         }
 
