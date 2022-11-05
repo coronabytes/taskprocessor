@@ -18,14 +18,13 @@ public class TaskService : BackgroundService, ITaskService
     public Task<string> EnqueueAsync(Expression<Func<Task>> methodCall, string queue)
     {
         var exec = _serviceProvider.GetRequiredService<IRemoteExpressionExecutor>();
-        var payload = exec.Serialize(methodCall);
 
         return _processor.EnqueueBatchAsync(queue, "core", new List<TaskData>
         {
             new()
             {
                 Topic = "expression",
-                Data = payload
+                Data = exec.Serialize(methodCall)
             }
         });
     }
@@ -34,8 +33,9 @@ public class TaskService : BackgroundService, ITaskService
     {
         if (ctx.Topic == "expression")
         {
+            await using var scope = _serviceProvider.CreateAsyncScope();
             var exec = _serviceProvider.GetRequiredService<IRemoteExpressionExecutor>();
-            await exec.InvokeAsync(ctx.Data, ctx, ctx.Cancel.Token).ConfigureAwait(false);
+            await exec.InvokeAsync(ctx, scope).ConfigureAwait(false);
         }
     }
 

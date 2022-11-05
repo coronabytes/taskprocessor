@@ -35,8 +35,11 @@ public class ExpressionTests
 
         var info = exec.Serialize(methodCall);
         _output.WriteLine($"#1 {sw.ElapsedTicks}");
-
-        await exec.InvokeAsync(info, null!, CancellationToken.None).ConfigureAwait(false);
+        await using var scope = _serviceProvider.CreateAsyncScope();
+        await exec.InvokeAsync(new TaskContext
+        {
+            Data = info
+        }, scope).ConfigureAwait(false);
         _output.WriteLine($"#2 {sw.ElapsedTicks}");
     }
 

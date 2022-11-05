@@ -30,7 +30,7 @@ public class TaskProcessor : ITaskProcessor
                 try
                 {
                     if (task.BatchId == batchId && !task.IsCancellation)
-                        task.Cancel.Cancel();
+                        task.Cancel();
                 }
                 catch (Exception)
                 {
@@ -269,7 +269,8 @@ end
                         BatchId = (string)taskData["batch"]!,
                         Tenant = (string)taskData["tenant"]!,
                         Queue = (string?)taskData["queue"],
-                        Cancel = linkedCts,
+                        CancelSource = linkedCts,
+                        CancelToken = linkedCts.Token,
                         Topic = (string?)taskData["topic"] ?? string.Empty,
                         Data = (byte[])taskData["data"]!,
                         IsContinuation = isContinuation,
@@ -306,7 +307,8 @@ end
                     ScheduleId = (string)taskData["schedule"]!,
                     Tenant = (string)taskData["tenant"]!,
                     Queue = (string?)taskData["queue"],
-                    Cancel = linkedCts,
+                    CancelSource = linkedCts,
+                    CancelToken = linkedCts.Token,
                     Topic = (string?)taskData["topic"] ?? string.Empty,
                     Data = (byte[])taskData["data"]!,
                     BatchId = null,

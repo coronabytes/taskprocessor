@@ -17,10 +17,10 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
     private class MethodCallInfo
     {
-        public string Type { get; set; }
-        public string Method { get; set; }
-        public List<string> Signature { get; set; }
-        public List<string?> Arguments { get; set; }
+        public string Type { get; set; } = string.Empty;
+        public string Method { get; set; } = string.Empty;
+        public List<string> Signature { get; set; } = null!;
+        public List<string?> Arguments { get; set; } = null!;
     }
 
     public byte[] Serialize(LambdaExpression methodCall, Type? explicitType)
@@ -46,9 +46,9 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
         });
     }
 
-    public async Task InvokeAsync(byte[] body, TaskContext ctx, CancellationToken token = default)
+    public async Task InvokeAsync(TaskContext ctx, IServiceScope scope)
     {
-        var info = JsonSerializer.Deserialize<MethodCallInfo>(body);
+        var info = JsonSerializer.Deserialize<MethodCallInfo>(ctx.Data);
 
         var type = Type.GetType(info.Type);
         var signature = info.Signature.Select(x => Type.GetType(x)).ToArray();
@@ -63,12 +63,16 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
         {
             var sig = signature[i];
             var json = info.Arguments[i];
-            if (json == null && sig == typeof(CancellationToken))
-                args.Add(token);
-            else if (json == null && sig == typeof(TaskContext))
-                args.Add(ctx);
-            else if (json == null)
-                args.Add(null);
+
+            if (json == null)
+            {
+                if (sig == typeof(CancellationToken))
+                    args.Add(ctx.CancelToken);
+                else if (sig == typeof(TaskContext))
+                    args.Add(ctx);
+                else
+                    args.Add(null);
+            }
             else
                 args.Add(JsonSerializer.Deserialize(json, sig));
         }
@@ -77,7 +81,6 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
         if (!method.IsStatic)
         {
-            using var scope = _serviceProvider.CreateScope();
             var instance = scope.ServiceProvider.GetRequiredService(type);
 
             if (returnType == typeof(Task))

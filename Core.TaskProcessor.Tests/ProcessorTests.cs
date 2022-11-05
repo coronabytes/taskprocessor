@@ -37,7 +37,7 @@ public class ProcessorTests
                 //await info.ExtendLockAsync(TimeSpan.FromMinutes(5));
                 _output.WriteLine($"Process: {info.Queue} {info.Topic}");
                 //throw new Exception("error");
-                await Task.Delay(500, info.Cancel.Token);
+                await Task.Delay(500, info.CancelToken);
             }
         };
     }
