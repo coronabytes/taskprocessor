@@ -48,4 +48,8 @@ public class TaskProcessorOptions
     public Func<TaskContext, Task> OnTaskEnd { get; set; } = _ => Task.CompletedTask;
 
     public string Redis { get; set; } = string.Empty;
+
+    public bool UseHostedService { get; set; }
+
+    public IRemoteExpressionExecutor ExpressionExecutor { get; set; } = new RemoteExpressionExecutor();
 }

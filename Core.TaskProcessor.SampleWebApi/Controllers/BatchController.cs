@@ -9,12 +9,10 @@ public class BatchController : ControllerBase
 {
     private readonly ITaskProcessor _processor;
     private readonly ISomeScopedService _someScopedService;
-    private readonly ITaskService _taskService;
 
-    public BatchController(ITaskProcessor processor, ITaskService taskService, ISomeScopedService someScopedService)
+    public BatchController(ITaskProcessor processor, ISomeScopedService someScopedService)
     {
         _processor = processor;
-        _taskService = taskService;
         _someScopedService = someScopedService;
     }
 
@@ -39,9 +37,9 @@ public class BatchController : ControllerBase
     [HttpPost("expression")]
     public async Task<string> Expression()
     {
-        return await _taskService
-            .EnqueueAsync(() =>
-                _someScopedService.DoSomethingAsync("hello", CancellationToken.None), "default")
+        return await _processor.EnqueueBatchAsync("default", "core", 
+                () => _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
+                    () => _someScopedService.DoSomethingAsync("world", CancellationToken.None))
             .ConfigureAwait(false);
     }
 

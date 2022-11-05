@@ -10,13 +10,14 @@ public class ExpressionTests
 {
     private readonly ITestOutputHelper _output;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IRemoteExpressionExecutor _executor = new RemoteExpressionExecutor();
 
     public ExpressionTests(ITestOutputHelper output)
     {
         _output = output;
 
+
         _serviceProvider = new ServiceCollection()
-            .AddSingleton<IRemoteExpressionExecutor, RemoteExpressionExecutor>()
             .AddSingleton<ISampleService, SampleService>()
             .BuildServiceProvider();
     }
@@ -28,15 +29,13 @@ public class ExpressionTests
 
     private async Task Execute(Expression<Func<Task>> methodCall)
     {
-        var exec = _serviceProvider.GetRequiredService<IRemoteExpressionExecutor>();
-
         var sw = new Stopwatch();
         sw.Start();
 
-        var info = exec.Serialize(methodCall);
+        var info = _executor.Serialize(methodCall);
         _output.WriteLine($"#1 {sw.ElapsedTicks}");
         await using var scope = _serviceProvider.CreateAsyncScope();
-        await exec.InvokeAsync(new TaskContext
+        await _executor.InvokeAsync(new TaskContext
         {
             Data = info
         }, scope).ConfigureAwait(false);

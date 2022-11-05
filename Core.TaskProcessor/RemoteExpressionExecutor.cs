@@ -1,5 +1,4 @@
-﻿using System;
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,11 +7,8 @@ namespace Core.TaskProcessor;
 
 public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 {
-    private readonly IServiceProvider _serviceProvider;
-
-    public RemoteExpressionExecutor(IServiceProvider serviceProvider)
+    public RemoteExpressionExecutor()
     {
-        _serviceProvider = serviceProvider;
     }
 
     private class MethodCallInfo

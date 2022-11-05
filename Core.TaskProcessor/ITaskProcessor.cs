@@ -1,3 +1,5 @@
+using System.Linq.Expressions;
+
 namespace Core.TaskProcessor;
 
 public interface ITaskProcessor
@@ -130,4 +132,8 @@ public interface ITaskProcessor
     ///     manually cleanup batches exceeding retention
     /// </summary>
     Task CleanUpAsync();
+
+    Task<string> EnqueueBatchAsync(string queue, string tenant, params Expression<Func<Task>>[] methodCalls);
+
+    public IRemoteExpressionExecutor Executor { get; }
 }

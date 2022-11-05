@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Concurrent;
+using System.Linq.Expressions;
 using System.Threading.Tasks.Dataflow;
 using Cronos;
 using StackExchange.Redis;
@@ -1061,6 +1063,23 @@ return #(taskIds);
         var db = _redis.GetDatabase();
         return await db.SortedSetLengthAsync(Prefix($"schedules:{tenant}")).ConfigureAwait(false);
     }
+
+    #endregion
+
+    #region Expression
+
+    public Task<string> EnqueueBatchAsync(string queue, string tenant, params Expression<Func<Task>>[] methodCalls)
+    {
+        var tasks = methodCalls.Select(x => new TaskData
+        {
+            Topic = "internal:expression:v1",
+            Data = _options.ExpressionExecutor.Serialize(x)
+        }).ToList();
+
+        return EnqueueBatchAsync(queue, tenant, tasks);
+    }
+
+    public IRemoteExpressionExecutor Executor => _options.ExpressionExecutor;
 
     #endregion
 }
