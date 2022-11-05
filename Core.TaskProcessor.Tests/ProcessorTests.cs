@@ -4,12 +4,12 @@ using Xunit.Abstractions;
 
 namespace Core.TaskProcessor.Tests;
 
-public class UnitTest1
+public class ProcessorTests
 {
     private readonly ITestOutputHelper _output;
     private readonly TaskProcessor _processor;
 
-    public UnitTest1(ITestOutputHelper output)
+    public ProcessorTests(ITestOutputHelper output)
     {
         _output = output;
         _processor = new TaskProcessor(new TaskProcessorOptions

@@ -1,3 +1,4 @@
+using Core.TaskProcessor.SampleWebApi.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Core.TaskProcessor.SampleWebApi.Controllers;
@@ -7,17 +8,19 @@ namespace Core.TaskProcessor.SampleWebApi.Controllers;
 public class BatchController : ControllerBase
 {
     private readonly ITaskProcessor _processor;
+    private readonly ISomeScopedService _someScopedService;
+    private readonly ITaskService _taskService;
 
-    public BatchController(ITaskProcessor processor)
+    public BatchController(ITaskProcessor processor, ITaskService taskService, ISomeScopedService someScopedService)
     {
         _processor = processor;
+        _taskService = taskService;
+        _someScopedService = someScopedService;
     }
 
     [HttpPost("enqueue")]
     public async Task<string> Enqueue()
     {
-        var batchId = Guid.NewGuid().ToString("D");
-
         await _processor.EnqueueBatchAsync("default", "core", new List<TaskData>
         {
             new(),
@@ -31,6 +34,15 @@ public class BatchController : ControllerBase
         }, "some tasks");
 
         return "ok";
+    }
+
+    [HttpPost("expression")]
+    public async Task<string> Expression()
+    {
+        return await _taskService
+            .EnqueueAsync(() =>
+                _someScopedService.DoSomethingAsync("hello", CancellationToken.None), "default")
+            .ConfigureAwait(false);
     }
 
     [HttpGet("list")]

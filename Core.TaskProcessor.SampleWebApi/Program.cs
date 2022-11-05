@@ -1,11 +1,13 @@
 using Core.TaskProcessor;
-using Core.TaskProcessor.SampleWebApi;
+using Core.TaskProcessor.SampleWebApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+
+builder.Services.AddSingleton<IRemoteExpressionExecutor, RemoteExpressionExecutor>();
 builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcessorOptions
 {
     Redis = "localhost:6379,abortConnect=false",
@@ -19,7 +21,10 @@ builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcesso
     OnTaskEnd = info => Task.CompletedTask
 }));
 
-builder.Services.AddHostedService<TaskService>();
+builder.Services.AddSingleton<ITaskService, TaskService>();
+builder.Services.AddHostedService(sp => (TaskService)sp.GetRequiredService<ITaskService>());
+
+builder.Services.AddScoped<ISomeScopedService, SomeScopedService>();
 
 var app = builder.Build();
 
