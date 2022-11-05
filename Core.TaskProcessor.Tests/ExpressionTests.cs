@@ -8,9 +8,9 @@ namespace Core.TaskProcessor.Tests;
 
 public class ExpressionTests
 {
+    private readonly IRemoteExpressionExecutor _executor = new RemoteExpressionExecutor();
     private readonly ITestOutputHelper _output;
     private readonly IServiceProvider _serviceProvider;
-    private readonly IRemoteExpressionExecutor _executor = new RemoteExpressionExecutor();
 
     public ExpressionTests(ITestOutputHelper output)
     {

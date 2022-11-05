@@ -11,6 +11,8 @@ public interface ITaskProcessor
     /// </summary>
     Func<TaskContext, Task> Execute { get; set; }
 
+    public IRemoteExpressionExecutor Executor { get; }
+
     /// <summary>
     ///     globally pauses all task and schedule processing
     /// </summary>
@@ -134,6 +136,4 @@ public interface ITaskProcessor
     Task CleanUpAsync();
 
     Task<string> EnqueueBatchAsync(string queue, string tenant, params Expression<Func<Task>>[] methodCalls);
-
-    public IRemoteExpressionExecutor Executor { get; }
 }

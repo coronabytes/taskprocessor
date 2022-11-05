@@ -7,18 +7,6 @@ namespace Core.TaskProcessor;
 
 public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 {
-    public RemoteExpressionExecutor()
-    {
-    }
-
-    private class MethodCallInfo
-    {
-        public string Type { get; set; } = string.Empty;
-        public string Method { get; set; } = string.Empty;
-        public List<string> Signature { get; set; } = null!;
-        public List<string?> Arguments { get; set; } = null!;
-    }
-
     public byte[] Serialize(LambdaExpression methodCall, Type? explicitType)
     {
         var callExpression = methodCall.Body as MethodCallExpression;
@@ -70,7 +58,9 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
                     args.Add(null);
             }
             else
+            {
                 args.Add(JsonSerializer.Deserialize(json, sig));
+            }
         }
 
         var returnType = method.ReturnType;
@@ -131,5 +121,13 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             default:
                 throw new NotSupportedException(expr.NodeType.ToString());
         }
+    }
+
+    private class MethodCallInfo
+    {
+        public string Type { get; set; } = string.Empty;
+        public string Method { get; set; } = string.Empty;
+        public List<string> Signature { get; set; } = null!;
+        public List<string?> Arguments { get; set; } = null!;
     }
 }

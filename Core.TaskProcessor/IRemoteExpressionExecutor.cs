@@ -4,7 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Core.TaskProcessor;
 
 /// <summary>
-///  Serializes and invokes method call expressions
+///     Serializes and invokes method call expressions
 /// </summary>
 public interface IRemoteExpressionExecutor
 {

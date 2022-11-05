@@ -19,6 +19,7 @@ public class BatchController : ControllerBase
     [HttpPost("enqueue")]
     public async Task<string> Enqueue()
     {
+        await _processor.ResumeAsync();
         await _processor.EnqueueBatchAsync("default", "core", new List<TaskData>
         {
             new(),
@@ -37,9 +38,11 @@ public class BatchController : ControllerBase
     [HttpPost("expression")]
     public async Task<string> Expression()
     {
-        return await _processor.EnqueueBatchAsync("default", "core", 
+        await _processor.ResumeAsync();
+
+        return await _processor.EnqueueBatchAsync("default", "core",
                 () => _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
-                    () => _someScopedService.DoSomethingAsync("world", CancellationToken.None))
+                () => _someScopedService.DoSomethingAsync("world", CancellationToken.None))
             .ConfigureAwait(false);
     }
 

@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Threading.Tasks.Dataflow;
@@ -511,7 +510,6 @@ end;
                     var remaining = Task.FromResult(1L);
 
                     if (!task.IsContinuation)
-                    {
                         if (!string.IsNullOrEmpty(task.BatchId))
                         {
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "done",
@@ -520,7 +518,6 @@ end;
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                                 (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
                         }
-                    }
 
                     tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId);
 
