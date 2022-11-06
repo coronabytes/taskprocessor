@@ -48,6 +48,7 @@ var batchId = await _processor.EnqueueBatchAsync("default", "my-tenant", batch =
 ## What functions can be invoked?
 - static functions
 - functions on types resolveable by the IServiceProvider (scoped interfaces preferred)
+- return type of void or Task
 - all parameters need to be json serializable with the default implementation (custom implementations possible)
 - constant parameters are fastest, yet complex lists and objects are also possible (dynamic invoked)
 - only the first method call will run in background - all parameters will be evaluated at enqueue time
@@ -79,7 +80,7 @@ await _processor.UpsertScheduleAsync(new ScheduleData
     Cron = "0 */1 * * *",
     Timezone = "Etc/UTC",
     Unique = true // if task hasn't completed yet - do not schedule again
-}, () => _someScopedService.DoSomething("!"), "high");
+}, () => _someScopedService.DoSomethingAsync("!", CancellationToken.None), "high");
 ```
 
 ## Cancel schedule
