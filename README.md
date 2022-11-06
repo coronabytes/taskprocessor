@@ -7,10 +7,8 @@ dotnet add package Core.TaskProcessor
 
 # .NET Background Task Processing Engine
 *Hangfire Pro Redis* except:
-- way less features
 - open source (Apache 2.0)
-- redis/elasticache 6+ storage engine (cluster mode with hash slot per prefix)
-- low level api (bring your own serialization / ui)
+- exclusive redis/elasticache 6+ storage engine (cluster mode supported)
 - multi tenancy
 - global pause and resume of all processing
 - every task belongs to a batch
@@ -18,81 +16,62 @@ dotnet add package Core.TaskProcessor
 - easy to access batch statistics per tenant
 - async extension points with access to batch information
 
-## Initialization
+## Initialization in AspNetCore
 
 ```csharp
-var proc = new TaskProcessor(new TaskProcessorOptions
+builder.Services.AddTaskProcessor(new TaskProcessorOptions
 {
-    Prefix = "{dev}", // redis cluster mode needs single hash slot
-    MaxWorkers = 4,
-    Queues = new[] { "high", "low" }, // pop queues from left to right - first non empty queue wins
     Redis = "localhost:6379,abortConnect=false",
+    Prefix = "{coretask}", // redis cluster mode needs single hash slot
+    Queues = new[] { "high", "default" }, // pop queues from left to right - first non empty queue wins
+    MaxWorkers = 4, // action block concurrency limit
     Retries = 3,
-    Retention = TimeSpan.FromDays(14), // batch information will be kept this long
     Invisibility = TimeSpan.FromMinutes(5), // task will be redelivered when taking longer than this
-    OnTaskStart = info =>
-    {
-        return Task.CompletedTask;
-    },
-    OnTaskEnd = info =>
-    {
-        return Task.CompletedTask;
-    }
-})
-{
-    Execute = async info =>
-    {
-        // TODO: Do your background work here
-        await Task.Delay(500, info.Cancel.Token);
-    }
-};
+    PollFrequency = TimeSpan.FromSeconds(10), // schedule + cleanup frequency
+    Retention = TimeSpan.FromDays(7), // batch information will be kept this long
+    UseHostedService = true // use supplied background worker service
+});
 ```
 
 ## Enqueue batch tasks
 
 ```csharp
-var batchId = await proc.EnqueueBatchAsync("low", "my-tenant",  new List<TaskData>
+var batchId = await _processor.EnqueueBatchAsync("default", "my-tenant", batch =>
 {
-    new()
-    {
-        Topic = "send-email",
-        Data = Encoding.UTF8.GetBytes("Reasonably small payload")
-    },
-    new()
-    {
-        Topic = "send-email"
-    },
-}, new List<TaskData>
-{
-    new()
-    {
-        Topic = "all-emails-send",
-        Queue = "high"
-    }
-});
+    batch.Enqueue(() => _someScopedService.DoSomethingAsync("hello", CancellationToken.None));
+    batch.Enqueue(() => _someScopedService.DoSomethingAsync("world", CancellationToken.None));
+
+    batch.ContinueWith(() => _someScopedService.DoSomething("!"), "high");
+})
 ```
+
+## What functions can be invoked?
+- static functions
+- functions on types resolveable by the IServiceProvider (scoped interfaces preferred)
+- all parameters need to be json serializable with the default implementation (custom implementations possible)
+- constant parameters are fastest, yet complex lists and objects are also possible (dynamic invoked)
+- only the first method call will run in background - all parameters will be evaluated at enqueue time
+- beware of functions in strongly named assemblys 
 
 ## Append tasks to batch (warning: continuations will run only once)
 
 ```csharp
-_processor.AppendBatchAsync("low", "my-tenant", batchId, new List<TaskData>
+await _processor.AppendBatchAsync("default", "my-tenant", batchId, batch =>
 {
-    new()
-    {
-        Topic = "send-another-email"
-    }
-});
+    batch.Enqueue(() => _someScopedService.DoSomethingAsync("hello 2", CancellationToken.None));
+    batch.Enqueue(() => _someScopedService.DoSomethingAsync("world 2", CancellationToken.None));
+})
 ```
 
 ## Cancel batch
 ```csharp
-await proc.CancelBatchAsync(batchId);
+await _processor.CancelBatchAsync(batchId);
 ```
 
 ## Schedule tasks
 
 ```csharp
-await proc.UpsertScheduleAsync(new ScheduleData
+await _processor.UpsertScheduleAsync(new ScheduleData
 {
     ScheduleId = "unique-schedule-id",
     Tenant = "my-tenant",
@@ -100,13 +79,7 @@ await proc.UpsertScheduleAsync(new ScheduleData
     Cron = "0 */1 * * *",
     Timezone = "Etc/UTC",
     Unique = true // if task hasn't completed yet - do not schedule again
-}, new TaskData
-{
-    Topic = "send-email",
-    Data = Encoding.UTF8.GetBytes("Reasonably small payload")
-    Queue = "low",
-    Retries = 3
-});
+}, () => _someScopedService.DoSomething("!"), "high");
 ```
 
 ## Cancel schedule
@@ -118,43 +91,6 @@ await proc.CancelScheduleAsync("unique-schedule-id", "my-tenant");
 ```csharp
 await proc.GetBatchesAsync("my-tenant", 0, 25);
 await proc.GetTasksInQueueAsync("low", 0, 25);
-```
-
-## Service Worker / AspNetCore
-
-```csharp
-
-builder.Services.AddSingleton<ITaskProcessor>(new TaskProcessor(new TaskProcessorOptions
-{
-  // ...
-}));
-builder.Services.AddHostedService<TaskService>();
-
-public class TaskService : BackgroundService
-{
-    private readonly ITaskProcessor _processor;
-    private readonly IServiceProvider _serviceProvider;
-
-    public TaskService(ITaskProcessor processor, IServiceProvider serviceProvider)
-    {
-        _processor = processor;
-        _serviceProvider = serviceProvider;
-
-        processor.Execute = Execute;
-    }
-
-    private async Task Execute(TaskContext ctx)
-    {
-        await using var scope = _serviceProvider.CreateAsyncScope();
-        // TODO: Do something on scope
-        await Task.Delay(1000, ctx.Cancel.Token);
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        await _processor.RunAsync(stoppingToken);
-    }
-}
 ```
 
 
