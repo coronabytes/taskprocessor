@@ -1,5 +1,4 @@
 ﻿using System.Linq.Expressions;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Core.TaskProcessor;
 
@@ -9,5 +8,5 @@ namespace Core.TaskProcessor;
 public interface IRemoteExpressionExecutor
 {
     byte[] Serialize(LambdaExpression methodCall, Type? explicitType = null);
-    Task InvokeAsync(TaskContext ctx, IServiceScope scope);
+    Task InvokeAsync(TaskContext ctx, Func<Type, object?> resolver);
 }

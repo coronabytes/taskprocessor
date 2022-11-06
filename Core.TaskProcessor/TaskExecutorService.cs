@@ -19,7 +19,11 @@ internal class TaskExecutorService : BackgroundService
     private async Task Execute(TaskContext ctx)
     {
         await using var scope = _serviceProvider.CreateAsyncScope();
-        await _processor.Executor.InvokeAsync(ctx, scope).ConfigureAwait(false);
+
+        if (ctx.Topic == "internal:expression:v1")
+            await _processor.Executor.InvokeAsync(ctx,
+                    type => scope.ServiceProvider.GetRequiredService(type))
+                .ConfigureAwait(false);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)

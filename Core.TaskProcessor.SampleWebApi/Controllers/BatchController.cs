@@ -16,33 +16,18 @@ public class BatchController : ControllerBase
         _someScopedService = someScopedService;
     }
 
-    [HttpPost("enqueue")]
-    public async Task<string> Enqueue()
+    [HttpPost("create")]
+    public async Task<string> Create()
     {
         await _processor.ResumeAsync();
-        await _processor.EnqueueBatchAsync("default", "core", new List<TaskData>
-        {
-            new(),
-            new()
-        }, new List<TaskData>
-        {
-            new()
+
+        return await _processor.EnqueueBatchAsync("default", "core", batch =>
             {
-                Topic = "continue"
-            }
-        }, "some tasks");
-
-        return "ok";
-    }
-
-    [HttpPost("expression")]
-    public async Task<string> Expression()
-    {
-        await _processor.ResumeAsync();
-
-        return await _processor.EnqueueBatchAsync("default", "core",
-                () => _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
-                () => _someScopedService.DoSomethingAsync("world", CancellationToken.None))
+                batch.Enqueue(() => _someScopedService.DoSomethingAsync("hello", CancellationToken.None));
+                batch.Enqueue(() => _someScopedService.DoSomethingAsync("world", CancellationToken.None));
+                
+                batch.ContinueWith(() => _someScopedService.DoSomething("!"), "high");
+            })
             .ConfigureAwait(false);
     }
 

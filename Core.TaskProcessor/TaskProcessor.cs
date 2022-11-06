@@ -703,6 +703,15 @@ return #(taskIds);
         await tra.ExecuteAsync().ConfigureAwait(false);
     }
 
+    public Task UpsertScheduleAsync(ScheduleData schedule, Expression<Func<Task>> methodCall)
+    {
+        return UpsertScheduleAsync(schedule, new TaskData
+        {
+            Topic = "internal:expression:v1",
+            Data = _options.ExpressionExecutor.Serialize(methodCall)
+        });
+    }
+
     public async Task<bool> CancelScheduleAsync(string globalUniqueId, string tenant)
     {
         var db = _redis.GetDatabase();
@@ -1065,15 +1074,64 @@ return #(taskIds);
 
     #region Expression
 
-    public Task<string> EnqueueBatchAsync(string queue, string tenant, params Expression<Func<Task>>[] methodCalls)
+    private class BatchDescription : IBatch
     {
-        var tasks = methodCalls.Select(x => new TaskData
-        {
-            Topic = "internal:expression:v1",
-            Data = _options.ExpressionExecutor.Serialize(x)
-        }).ToList();
+        private readonly TaskProcessor _taskProcessor;
 
-        return EnqueueBatchAsync(queue, tenant, tasks);
+        public BatchDescription(TaskProcessor taskProcessor)
+        {
+            _taskProcessor = taskProcessor;
+        }
+
+        public void Enqueue(Expression<Func<Task>> methodCall, string? queue = null)
+        {
+            Tasks.Add(new TaskData
+            {
+                Topic = "internal:expression:v1",
+                Data = _taskProcessor.Executor.Serialize(methodCall),
+                Queue = queue
+            });
+        }
+
+        public void ContinueWith(Expression<Func<Task>> methodCall, string? queue = null)
+        {
+            Continuations.Add(new TaskData
+            {
+                Topic = "internal:expression:v1",
+                Data = _taskProcessor.Executor.Serialize(methodCall),
+                Queue = queue
+            });
+        }
+
+        public void Enqueue(Expression<Action> methodCall, string? queue = null)
+        {
+            Tasks.Add(new TaskData
+            {
+                Topic = "internal:expression:v1",
+                Data = _taskProcessor.Executor.Serialize(methodCall),
+                Queue = queue
+            });
+        }
+
+        public void ContinueWith(Expression<Action> methodCall, string? queue = null)
+        {
+            Continuations.Add(new TaskData
+            {
+                Topic = "internal:expression:v1",
+                Data = _taskProcessor.Executor.Serialize(methodCall),
+                Queue = queue
+            });
+        }
+
+        public List<TaskData> Tasks { get; } = new();
+        public List<TaskData> Continuations { get; } = new();
+    }
+
+    public Task<string> EnqueueBatchAsync(string queue, string tenant, Action<IBatch> batchAction)
+    {
+        var batch = new BatchDescription(this);
+        batchAction(batch);
+        return EnqueueBatchAsync(queue, tenant, batch.Tasks, batch.Continuations);
     }
 
     public IRemoteExpressionExecutor Executor => _options.ExpressionExecutor;

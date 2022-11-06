@@ -1,0 +1,28 @@
+version: '3.9'
+
+services:
+
+  redis:
+    container_name: redis
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - 6379:6379
+    volumes:
+      - redis:/data
+    command: redis-server --appendonly yes
+    
+  redisinsight:
+    container_name: redisinsight
+    image: redislabs/redisinsight:latest
+    restart: unless-stopped
+    volumes:
+      - redisinsight:/db
+    depends_on:
+      - redis
+    ports:
+      - 8001:8001
+
+volumes:
+  redis:
+  redisinsight:

@@ -1,41 +1,35 @@
 ﻿using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
+using System.Text.Json.Serialization;
 
 namespace Core.TaskProcessor;
 
 public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 {
-    public byte[] Serialize(LambdaExpression methodCall, Type? explicitType)
+    public virtual byte[] Serialize(LambdaExpression methodCall, Type? explicitType)
     {
         var callExpression = methodCall.Body as MethodCallExpression;
         var type = explicitType ?? callExpression?.Method.DeclaringType;
         var method = callExpression!.Method;
 
-        return JsonSerializer.SerializeToUtf8Bytes(new MethodCallInfo
+        var info = new MethodCallInfo
         {
-            Type = type!.AssemblyQualifiedName!,
+            Type = SerializeType(type!) ?? string.Empty,
             Method = method.Name,
-            Signature = method.GetParameters().Select(x => x.ParameterType.FullName).ToList()!,
-            Arguments = callExpression.Arguments.Select(x =>
-            {
-                var arg = Evaluate(x);
+            Signature = method.GetParameters().Select(x => SerializeType(x.ParameterType)).ToList()!,
+            Arguments = callExpression.Arguments.Select(x => { return SerializeArgument(x); }).ToList()
+        };
 
-                if (arg is null or CancellationToken or TaskContext)
-                    return null;
-
-                return JsonSerializer.Serialize(arg);
-            }).ToList()
-        });
+        return SerializeBinary(info);
     }
 
-    public async Task InvokeAsync(TaskContext ctx, IServiceScope scope)
+    public virtual async Task InvokeAsync(TaskContext ctx, Func<Type, object?> resolver)
     {
-        var info = JsonSerializer.Deserialize<MethodCallInfo>(ctx.Data);
+        var info = DeserializeBinary(ctx.Data, typeof(MethodCallInfo)) as MethodCallInfo;
 
-        var type = Type.GetType(info.Type);
-        var signature = info.Signature.Select(x => Type.GetType(x)).ToArray();
+        var type = DeserializeType(info.Type);
+        var signature = info.Signature.Select(DeserializeType).ToArray();
         var method = type.GetMethod(info.Method, signature);
 
         if (method == null)
@@ -45,56 +39,106 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
         for (var i = 0; i < signature.Length; i++)
         {
-            var sig = signature[i];
+            var sig = signature[i]!;
             var json = info.Arguments[i];
 
-            if (json == null)
-            {
-                if (sig == typeof(CancellationToken))
-                    args.Add(ctx.CancelToken);
-                else if (sig == typeof(TaskContext))
-                    args.Add(ctx);
-                else
-                    args.Add(null);
-            }
-            else
-            {
-                args.Add(JsonSerializer.Deserialize(json, sig));
-            }
+            args.Add(DeserializeArgument(ctx, sig, json));
         }
 
         var returnType = method.ReturnType;
+        var instance = method.IsStatic ? null : resolver(type);
 
-        if (!method.IsStatic)
+        if (returnType == typeof(Task))
         {
-            var instance = scope.ServiceProvider.GetRequiredService(type);
-
-            if (returnType == typeof(Task))
-            {
-                dynamic awaitable = method.Invoke(instance, args.ToArray())!;
-                await awaitable;
-            }
-            else if (returnType == typeof(void))
-            {
-                method.Invoke(instance, args.ToArray());
-            }
+            dynamic awaitable = method.Invoke(instance, args.ToArray())!;
+            await awaitable;
         }
-        else
+        else if (returnType == typeof(void))
         {
-            if (returnType == typeof(Task))
-            {
-                dynamic awaitable = method.Invoke(null, args.ToArray())!;
-                await awaitable;
-            }
-            else if (returnType == typeof(void))
-            {
-                method.Invoke(null, args.ToArray());
-            }
+            method.Invoke(instance, args.ToArray());
         }
     }
 
+    protected virtual byte[] SerializeBinary(object obj)
+    {
+        return JsonSerializer.SerializeToUtf8Bytes(obj);
+    }
+
+    protected virtual string SerializeText(object obj)
+    {
+        return JsonSerializer.Serialize(obj, new JsonSerializerOptions
+        {
+            ReferenceHandler = ReferenceHandler.Preserve
+        });
+    }
+
+    protected virtual object? DeserializeBinary(byte[] data, Type type)
+    {
+        return JsonSerializer.Deserialize(data, type);
+    }
+
+    protected virtual object? DeserializeText(string text, Type type)
+    {
+        return JsonSerializer.Deserialize(text, type, new JsonSerializerOptions
+        {
+            ReferenceHandler = ReferenceHandler.Preserve
+        });
+    }
+
+    protected virtual object? DeserializeArgument(TaskContext ctx, Type sig, string? arg)
+    {
+        if (arg == null)
+        {
+            if (sig == typeof(CancellationToken))
+                return ctx.CancelToken;
+            if (sig == typeof(TaskContext))
+                return ctx;
+            return null;
+        }
+
+        return DeserializeText(arg, sig);
+    }
+
+    protected virtual string? SerializeArgument(Expression exp)
+    {
+        var arg = Evaluate(exp);
+
+        if (arg is null or CancellationToken or TaskContext)
+            return null;
+
+        return SerializeText(arg);
+    }
+
+    protected virtual string? SerializeType(Type type)
+    {
+        if (type.IsPrimitive
+            || type == typeof(CancellationToken)
+            || type.Namespace == "System"
+            || type.Namespace?.StartsWith("System.Collections") == true)
+            return type.FullName;
+
+        return type.AssemblyQualifiedName;
+    }
+
+    protected virtual Type? DeserializeType(string type)
+    {
+        // exact match
+        var t1 = Type.GetType(type, false);
+
+        if (t1 != null)
+            return t1;
+
+        // fuzzy match
+        return Type.GetType(type, asn =>
+        {
+            asn.Version = null;
+            asn.SetPublicKey(null);
+            return Assembly.Load(asn);
+        }, null, false);
+    }
+
     // https://stackoverflow.com/questions/36861196/how-to-serialize-method-call-expression-with-arguments
-    private static object? Evaluate(Expression? expr)
+    protected virtual object? Evaluate(Expression? expr)
     {
         if (expr == null)
             return null;
@@ -123,7 +167,7 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
         }
     }
 
-    private class MethodCallInfo
+    protected class MethodCallInfo
     {
         public string Type { get; set; } = string.Empty;
         public string Method { get; set; } = string.Empty;

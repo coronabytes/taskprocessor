@@ -97,6 +97,8 @@ public interface ITaskProcessor
     /// </summary>
     Task UpsertScheduleAsync(ScheduleData schedule, TaskData task);
 
+    Task UpsertScheduleAsync(ScheduleData schedule, Expression<Func<Task>> methodCall);
+
     /// <summary>
     ///     execute schedule without affecting next execution
     /// </summary>
@@ -135,5 +137,5 @@ public interface ITaskProcessor
     /// </summary>
     Task CleanUpAsync();
 
-    Task<string> EnqueueBatchAsync(string queue, string tenant, params Expression<Func<Task>>[] methodCalls);
+    Task<string> EnqueueBatchAsync(string defaultQueue, string tenant, Action<IBatch> batchAction);
 }

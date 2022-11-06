@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
+using Newtonsoft.Json.Linq;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -15,8 +16,6 @@ public class ExpressionTests
     public ExpressionTests(ITestOutputHelper output)
     {
         _output = output;
-
-
         _serviceProvider = new ServiceCollection()
             .AddSingleton<ISampleService, SampleService>()
             .BuildServiceProvider();
@@ -38,7 +37,8 @@ public class ExpressionTests
         await _executor.InvokeAsync(new TaskContext
         {
             Data = info
-        }, scope).ConfigureAwait(false);
+        }, type => scope.ServiceProvider.GetRequiredService(type))
+            .ConfigureAwait(false);
         _output.WriteLine($"#2 {sw.ElapsedTicks}");
     }
 
@@ -47,20 +47,17 @@ public class ExpressionTests
     {
         var s = "hello";
         var sampleService = _serviceProvider.GetRequiredService<ISampleService>();
-        await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
-        await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
+        //await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
+        var list = new List<string> {"1", "2"};
+        await Execute(() => sampleService.SomeFunction(list));
+        //await Execute(() => sampleService.SomeFunction(new List<string> {"1", "2"}));
+        //await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
     }
 
     private interface ISampleService
     {
         Task SomeFunction(string s, decimal d, int i, CancellationToken token);
-        Task SomeFunction(string s);
+        Task SomeFunction(List<string> list);
     }
 
     private class SampleService : ISampleService
@@ -70,8 +67,9 @@ public class ExpressionTests
             await Task.Delay(0, token);
         }
 
-        public async Task SomeFunction(string s)
+        public async Task SomeFunction(List<string> list)
         {
+            await Task.Delay(0);
         }
     }
 }
