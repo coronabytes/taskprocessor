@@ -137,5 +137,8 @@ public interface ITaskProcessor
     /// </summary>
     Task CleanUpAsync();
 
-    Task<string> EnqueueBatchAsync(string defaultQueue, string tenant, Action<IBatch> batchAction);
+    Task<string> EnqueueBatchAsync(string defaultQueue, string tenant, Action<IBatchContinue> batchAction);
+
+    Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, Action<IBatchEnqueue> batchAction);
+
 }

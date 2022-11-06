@@ -1074,11 +1074,11 @@ return #(taskIds);
 
     #region Expression
 
-    private class BatchDescription : IBatch
+    private class BatchBuilder : IBatchContinue
     {
         private readonly TaskProcessor _taskProcessor;
 
-        public BatchDescription(TaskProcessor taskProcessor)
+        public BatchBuilder(TaskProcessor taskProcessor)
         {
             _taskProcessor = taskProcessor;
         }
@@ -1127,11 +1127,18 @@ return #(taskIds);
         public List<TaskData> Continuations { get; } = new();
     }
 
-    public Task<string> EnqueueBatchAsync(string queue, string tenant, Action<IBatch> batchAction)
+    public Task<string> EnqueueBatchAsync(string queue, string tenant, Action<IBatchContinue> batchAction)
     {
-        var batch = new BatchDescription(this);
+        var batch = new BatchBuilder(this);
         batchAction(batch);
         return EnqueueBatchAsync(queue, tenant, batch.Tasks, batch.Continuations);
+    }
+
+    public Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, Action<IBatchEnqueue> batchAction)
+    {
+        var batch = new BatchBuilder(this);
+        batchAction(batch);
+        return AppendBatchAsync(queue, tenant, batchId, batch.Tasks);
     }
 
     public IRemoteExpressionExecutor Executor => _options.ExpressionExecutor;

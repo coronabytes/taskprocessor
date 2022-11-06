@@ -138,6 +138,7 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
     }
 
     // https://stackoverflow.com/questions/36861196/how-to-serialize-method-call-expression-with-arguments
+    // https://stackoverflow.com/questions/2616638/access-the-value-of-a-member-expression
     protected virtual object? Evaluate(Expression? expr)
     {
         if (expr == null)
@@ -162,6 +163,11 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             case ExpressionType.New:
                 return ((NewExpression)expr).Constructor
                     .Invoke(((NewExpression)expr).Arguments.Select(Evaluate).ToArray());
+            case ExpressionType.ListInit:
+            case ExpressionType.MemberInit:
+            case ExpressionType.NewArrayInit:
+                // just execute it...
+                return Expression.Lambda(expr).Compile().DynamicInvoke();
             default:
                 throw new NotSupportedException(expr.NodeType.ToString());
         }
