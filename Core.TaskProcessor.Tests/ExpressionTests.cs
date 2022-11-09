@@ -1,7 +1,6 @@
 using System.Diagnostics;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
-using Newtonsoft.Json.Linq;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -35,9 +34,9 @@ public class ExpressionTests
         _output.WriteLine($"#1 {sw.ElapsedMilliseconds}");
         await using var scope = _serviceProvider.CreateAsyncScope();
         await _executor.InvokeAsync(new TaskContext
-        {
-            Data = info
-        }, type => scope.ServiceProvider.GetRequiredService(type))
+            {
+                Data = info
+            }, type => scope.ServiceProvider.GetRequiredService(type))
             .ConfigureAwait(false);
         _output.WriteLine($"#2 {sw.ElapsedMilliseconds}");
     }
@@ -48,23 +47,32 @@ public class ExpressionTests
         var s = "hello";
         var sampleService = _serviceProvider.GetRequiredService<ISampleService>();
         await Execute(() => sampleService.SomeFunction(s, 123.45m, 1337, CancellationToken.None));
-        var list = new List<string> {"1", "2"};
+        var list = new List<string> { "1", "2" };
         await Execute(() => sampleService.SomeFunction(list));
-        await Execute(() => sampleService.SomeFunction(new List<string> {"1", "2"}));
+        await Execute(() => sampleService.SomeFunction(new List<string> { "1", "2" }));
         await Execute(() => sampleService.SomeFunction(new SomeData
         {
             Name = "Test",
             Value = 1337.5m,
-            Tags = new HashSet<string> {"a", "b", "c"}
+            Tags = new HashSet<string> { "a", "b", "c" }
         }));
         await Execute(() => SomeStaticFunction(s, 123.45m, 1337, CancellationToken.None));
+
+        await Execute(() => sampleService.SomeGenericFunction(new SomeData<string, int>
+        {
+            Id = "Test",
+            Name = "test",
+            Tags = new HashSet<int> { 1, 2, 3 }
+        }));
     }
+
 
     private interface ISampleService
     {
         Task SomeFunction(string s, decimal d, int i, CancellationToken token);
         Task SomeFunction(List<string> list);
         Task SomeFunction(SomeData data);
+        Task SomeGenericFunction<T>(T data) where T : SomeBaseData;
     }
 
     private class SampleService : ISampleService
@@ -83,6 +91,12 @@ public class ExpressionTests
         {
             await Task.Delay(0);
         }
+
+        public async Task SomeGenericFunction<T>(T data) where T : SomeBaseData
+        {
+            var name = data.Print();
+            await Task.Delay(0);
+        }
     }
 
     private class SomeData
@@ -90,5 +104,26 @@ public class ExpressionTests
         public string Name { get; set; }
         public decimal Value { get; set; }
         public HashSet<string> Tags { get; set; }
+    }
+
+    private abstract class SomeBaseData
+    {
+        public string Id { get; set; } = "Base";
+
+        public virtual string Print()
+        {
+            return Id;
+        }
+    }
+
+    private class SomeData<T, V> : SomeBaseData
+    {
+        public T Name { get; set; }
+        public HashSet<V> Tags { get; set; }
+
+        public override string Print()
+        {
+            return $"{Id} {Name}";
+        }
     }
 }

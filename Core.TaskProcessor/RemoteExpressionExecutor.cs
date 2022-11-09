@@ -18,7 +18,8 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             Type = SerializeType(type!) ?? string.Empty,
             Method = method.Name,
             Signature = method.GetParameters().Select(x => SerializeType(x.ParameterType)).ToList()!,
-            Arguments = callExpression.Arguments.Select(x => { return SerializeArgument(x); }).ToList()
+            Arguments = callExpression.Arguments.Select(x => { return SerializeArgument(x); }).ToList(),
+            Generics = method.GetGenericArguments().Select(x => SerializeType(x)).ToList()!,
         };
 
         return SerializeBinary(info);
@@ -31,12 +32,31 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
         var type = DeserializeType(info.Type)!;
         var signature = info.Signature.Select(DeserializeType).ToArray();
-        var method = type.GetMethod(info.Method,
-            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance,
-            signature!);
+        
+        MethodInfo? method;
+
+        if (info.Generics?.Any() == true)
+        {
+            var genMethod = type.GetMethod(info.Method, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
+
+            if (genMethod == null)
+                throw new MissingMethodException(info.Type, info.Method);
+
+            var genArgs = info.Generics.Select(DeserializeType).ToArray();
+
+            method = genMethod.MakeGenericMethod(genArgs);
+        }
+        else
+        {
+            method = type.GetMethod(info.Method,
+                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy,
+                signature!);
+        }
 
         if (method == null)
+        {
             throw new MissingMethodException(info.Type, info.Method);
+        }
 
         var args = new List<object?>();
 
@@ -179,5 +199,6 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
         public string Method { get; set; } = string.Empty;
         public List<string> Signature { get; set; } = null!;
         public List<string?> Arguments { get; set; } = null!;
+        public List<string>? Generics { get; set; }
     }
 }
