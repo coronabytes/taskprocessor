@@ -14,6 +14,7 @@ public class TaskProcessor : ITaskProcessor
     private readonly ConnectionMultiplexer _redis;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<string, TaskContext> _tasks = new();
+    private DateTime _nextCleanup = DateTime.UtcNow;
 
     public TaskProcessor(TaskProcessorOptions options)
     {
@@ -377,7 +378,18 @@ end
 
     public async Task CleanUpAsync()
     {
+        if (_nextCleanup > DateTime.UtcNow)
+            return;
+        _nextCleanup = DateTime.UtcNow.Add(_options.CleanUpFrequency);
+
+
         var db = _redis.GetDatabase();
+
+        var lockTaken = await db.LockTakeAsync(Prefix("cleanup-lock"), Environment.MachineName,
+            _options.CleanUpFrequency).ConfigureAwait(false);
+
+        if (!lockTaken)
+            return;
 
         await db.ScriptEvaluateAsync($@"
 if redis.replicate_commands~=nil then 
@@ -683,13 +695,13 @@ return #(taskIds);
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
-        tra.HashSetAsync(Prefix($"schedule:{schedule.ScheduleId}"), new[]
+        tra.HashSetAsync(Prefix($"schedule:{schedule.Id}"), new[]
         {
-            new HashEntry("id", schedule.ScheduleId),
-            new HashEntry("timezone", schedule.Timezone),
+            new HashEntry("id", schedule.Id),
+            new HashEntry("timezone", schedule.Timezone ?? "Etc/UTC"),
             new HashEntry("data", task.Data),
             new HashEntry("topic", task.Topic),
-            new HashEntry("queue", task.Queue ?? "default"),
+            new HashEntry("queue", task.Queue ?? schedule.Queue),
             new HashEntry("scope", schedule.Scope),
             new HashEntry("tenant", schedule.Tenant),
             new HashEntry("retries", task.Retries ?? _options.Retries),
@@ -697,8 +709,8 @@ return #(taskIds);
             new HashEntry("next", next!.Value.ToUnixTimeSeconds()),
             new HashEntry("unique", schedule.Unique)
         }).ConfigureAwait(false);
-        tra.SortedSetAddAsync(Prefix("schedules"), schedule.ScheduleId, next!.Value.ToUnixTimeSeconds());
-        tra.SortedSetAddAsync(Prefix($"schedules:{schedule.Tenant}"), schedule.ScheduleId, 0);
+        tra.SortedSetAddAsync(Prefix("schedules"), schedule.Id, next.Value.ToUnixTimeSeconds());
+        tra.SortedSetAddAsync(Prefix($"schedules:{schedule.Tenant}"), schedule.Id, 0);
 #pragma warning restore CS4014
         await tra.ExecuteAsync().ConfigureAwait(false);
     }
@@ -708,7 +720,18 @@ return #(taskIds);
         return UpsertScheduleAsync(schedule, new TaskData
         {
             Topic = "internal:expression:v1",
-            Data = _options.ExpressionExecutor.Serialize(methodCall)
+            Data = _options.ExpressionExecutor.Serialize(methodCall),
+            Queue = schedule.Queue,
+        });
+    }
+
+    public Task UpsertScheduleAsync(ScheduleData schedule, Expression<Action> methodCall)
+    {
+        return UpsertScheduleAsync(schedule, new TaskData
+        {
+            Topic = "internal:expression:v1",
+            Data = _options.ExpressionExecutor.Serialize(methodCall),
+            Queue = schedule.Queue,
         });
     }
 
@@ -1053,11 +1076,12 @@ return #(taskIds);
             var schedule = scheduleResult.Result.ToDictionary();
             list.Add(new ScheduleInfo
             {
+                Id = schedule["id"]!,
                 Scope = schedule["scope"]!,
                 Cron = schedule["cron"]!,
                 Timezone = schedule["timezone"]!,
                 Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime,
-                Unique = (bool)schedule["unique"]
+                Unique = (bool)schedule["unique"],
             });
         }
 

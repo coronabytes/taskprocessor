@@ -105,7 +105,7 @@ public class ProcessorTests
     {
         await _processor.UpsertScheduleAsync(new ScheduleData
         {
-            ScheduleId = "123",
+            Id = "123",
             Tenant = "1001",
             Scope = "Fetch Emails",
             Cron = "*/2 * * * *",

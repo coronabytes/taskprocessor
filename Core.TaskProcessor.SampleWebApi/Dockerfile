@@ -1,9 +1,9 @@
-FROM mcr.microsoft.com/dotnet/aspnet:6.0-alpine AS base
+FROM mcr.microsoft.com/dotnet/aspnet:7.0-alpine AS base
 RUN apk --no-cache add tzdata
 WORKDIR /app
 EXPOSE 80
 
-FROM mcr.microsoft.com/dotnet/sdk:6.0-alpine AS build
+FROM mcr.microsoft.com/dotnet/sdk:7.0-alpine AS build
 WORKDIR /src
 COPY ["Core.TaskProcessor.SampleWebApi/Core.TaskProcessor.SampleWebApi.csproj", "Core.TaskProcessor.SampleWebApi/"]
 RUN dotnet restore "Core.TaskProcessor.SampleWebApi/Core.TaskProcessor.SampleWebApi.csproj"

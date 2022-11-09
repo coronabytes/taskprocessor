@@ -98,6 +98,7 @@ public interface ITaskProcessor
     Task UpsertScheduleAsync(ScheduleData schedule, TaskData task);
 
     Task UpsertScheduleAsync(ScheduleData schedule, Expression<Func<Task>> methodCall);
+    Task UpsertScheduleAsync(ScheduleData schedule, Expression<Action> methodCall);
 
     /// <summary>
     ///     execute schedule without affecting next execution

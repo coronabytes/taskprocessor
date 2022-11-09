@@ -2,6 +2,7 @@
 
 {prefix}:global:run					STRING
 {prefix}:scheduler-lock				STRING	
+{prefix}:cleanup-lock				STRING	
 
 # Queues
 

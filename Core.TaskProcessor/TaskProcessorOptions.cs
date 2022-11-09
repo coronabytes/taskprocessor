@@ -25,6 +25,11 @@ public class TaskProcessorOptions
     public TimeSpan PollFrequency { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
+    ///     how frequent cleanups are executed
+    /// </summary>
+    public TimeSpan CleanUpFrequency { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>
     ///     how long batches are kept
     /// </summary>
     public TimeSpan Retention { get; set; } = TimeSpan.FromDays(14);
