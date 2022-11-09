@@ -81,7 +81,7 @@ await _processor.UpsertScheduleAsync(new ScheduleData
     Cron = "0 */1 * * *",
     Timezone = "Etc/UTC",
     Unique = true // if task is enqueued but hasn't completed yet, it will be skipped
-}, () => _someScopedService.DoSomethingAsync("scheduled task", CancellationToken.None), "high");
+}, () => _someScopedService.DoSomethingAsync("scheduled task", CancellationToken.None));
 ```
 
 ## Cancel schedule
