@@ -23,7 +23,7 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
 {
     Redis = "localhost:6379,abortConnect=false",
     Prefix = "{coretask}", // redis cluster mode needs single hash slot
-    Queues = new[] { "high", "default" }, // pop queues from left to right - first non empty queue wins
+    Queues = new[] { "high", "default", "low" }, // pop queues from left to right - first non empty queue wins
     MaxWorkers = 4, // action block concurrency limit
     Retries = 3,
     Invisibility = TimeSpan.FromMinutes(5), // task will be redelivered when taking longer than this
@@ -74,13 +74,14 @@ await _processor.CancelBatchAsync(batchId);
 ```csharp
 await _processor.UpsertScheduleAsync(new ScheduleData
 {
-    ScheduleId = "unique-schedule-id",
+    Id = "unique-schedule-id",
     Tenant = "my-tenant",
+    Queue = "default",
     Scope = "Send hourly email",
     Cron = "0 */1 * * *",
     Timezone = "Etc/UTC",
-    Unique = true // if task hasn't completed yet - do not schedule again
-}, () => _someScopedService.DoSomethingAsync("!", CancellationToken.None), "high");
+    Unique = true // if task is enqueued but hasn't completed yet, it will be skipped
+}, () => _someScopedService.DoSomethingAsync("scheduled task", CancellationToken.None), "high");
 ```
 
 ## Cancel schedule
