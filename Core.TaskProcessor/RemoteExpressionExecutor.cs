@@ -26,11 +26,14 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
     public virtual async Task InvokeAsync(TaskContext ctx, Func<Type, object?> resolver)
     {
-        var info = DeserializeBinary(ctx.Data, typeof(MethodCallInfo)) as MethodCallInfo;
+        if (DeserializeBinary(ctx.Data, typeof(MethodCallInfo)) is not MethodCallInfo info)
+            throw new ArgumentException("bad method call info", nameof(ctx));
 
-        var type = DeserializeType(info.Type);
+        var type = DeserializeType(info.Type)!;
         var signature = info.Signature.Select(DeserializeType).ToArray();
-        var method = type.GetMethod(info.Method, signature);
+        var method = type.GetMethod(info.Method,
+            BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance,
+            signature!);
 
         if (method == null)
             throw new MissingMethodException(info.Type, info.Method);
@@ -151,17 +154,14 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             case ExpressionType.MemberAccess:
                 var me = (MemberExpression)expr;
                 var target = Evaluate(me.Expression);
-                switch (me.Member.MemberType)
+                return me.Member.MemberType switch
                 {
-                    case MemberTypes.Field:
-                        return ((FieldInfo)me.Member).GetValue(target);
-                    case MemberTypes.Property:
-                        return ((PropertyInfo)me.Member).GetValue(target, null);
-                    default:
-                        throw new NotSupportedException(me.Member.MemberType.ToString());
-                }
+                    MemberTypes.Field => ((FieldInfo)me.Member).GetValue(target),
+                    MemberTypes.Property => ((PropertyInfo)me.Member).GetValue(target, null),
+                    _ => throw new NotSupportedException(me.Member.MemberType.ToString())
+                };
             case ExpressionType.New:
-                return ((NewExpression)expr).Constructor
+                return ((NewExpression)expr).Constructor!
                     .Invoke(((NewExpression)expr).Arguments.Select(Evaluate).ToArray());
             case ExpressionType.ListInit:
             case ExpressionType.MemberInit:

@@ -21,7 +21,7 @@ public class ExpressionTests
             .BuildServiceProvider();
     }
 
-    public static async Task SomeStaticFunction(string s, decimal d, int i, CancellationToken token)
+    private static async Task SomeStaticFunction(string s, decimal d, int i, CancellationToken token)
     {
         await Task.Delay(0, token);
     }
