@@ -80,7 +80,7 @@ await _processor.UpsertScheduleAsync(new ScheduleData
     Scope = "Send hourly email",
     Cron = "0 */1 * * *",
     Timezone = "Etc/UTC",
-    Unique = true // if task is enqueued but hasn't completed yet, it will be skipped
+    Unique = true // if task is enqueued from previous cycle and hasn't completed yet, this cycle will be skipped
 }, () => _someScopedService.DoSomethingAsync("scheduled task", CancellationToken.None));
 ```
 
