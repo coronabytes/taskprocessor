@@ -382,7 +382,6 @@ end
             return;
         _nextCleanup = DateTime.UtcNow.Add(_options.CleanUpFrequency);
 
-
         var db = _redis.GetDatabase();
 
         var lockTaken = await db.LockTakeAsync(Prefix("cleanup-lock"), Environment.MachineName,
@@ -415,7 +414,7 @@ for k, batchId in ipairs(batches) do
   redis.call('del', ""{Prefix("batch:")}""..batchId);
   redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
 end;
-", _queues);
+", _queues); // TODO: All queues? not just the ones configured
     }
 
     private string Prefix(string s)
@@ -471,9 +470,11 @@ end;
         {
             var start = DateTimeOffset.UtcNow;
 
+            long retries = 0;
+
             try
             {
-                var retries = await db.HashDecrementAsync(Prefix($"task:{task.TaskId}"), "retries")
+                retries = await db.HashDecrementAsync(Prefix($"task:{task.TaskId}"), "retries")
                     .ConfigureAwait(false);
 
                 if (retries <= 0)
@@ -545,14 +546,34 @@ end;
             }
             catch
             {
+                TimeSpan? delay = null;
+
+                try
+                {
+                    delay = await _options.OnTaskFailedDelay(task, retries);
+                }
+                catch
+                {
+                    //
+                }
+
                 var tra = db.CreateTransaction();
 #pragma warning disable CS4014
                 tra.ListRemoveAsync(Prefix($"queue:{task.Queue}:checkout"), task.TaskId,
                     flags: CommandFlags.FireAndForget);
-                tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId, flags: CommandFlags.FireAndForget);
-                tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
-                    CommandFlags.FireAndForget);
 
+                if (delay.HasValue)
+                {
+                    tra.SortedSetUpdateAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, 
+                        DateTimeOffset.UtcNow.Add(delay.Value).ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
+                }
+                else
+                {
+                    tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId, flags: CommandFlags.FireAndForget);
+                    tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
+                        CommandFlags.FireAndForget);
+                }
+                
                 if (!task.IsContinuation && string.IsNullOrEmpty(task.BatchId))
                     tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                         (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
