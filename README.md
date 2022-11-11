@@ -11,7 +11,7 @@ dotnet add package Core.TaskProcessor
 - exclusive redis/elasticache 6+ storage engine (cluster mode supported)
 - multi tenancy
 - global pause and resume of all processing
-- every task belongs to a batch
+- every (non-recurring) task belongs to a batch
 - batch cancelation can abort in process tasks "instantly"
 - easy to access batch statistics per tenant
 - async extension points with access to batch information
@@ -93,6 +93,40 @@ await proc.CancelScheduleAsync("unique-schedule-id", "my-tenant");
 ```csharp
 await proc.GetBatchesAsync("my-tenant", 0, 25);
 await proc.GetTasksInQueueAsync("low", 0, 25);
+```
+
+## custom background worker
+If you need to integrate another ioc solution set UseHostedService = false
+and provide a custom one. Executor.InvokeAsync has an Type to instance resolver callback.
+```csharp
+class CustomExecutorService : BackgroundService
+{
+    private readonly ITaskProcessor _processor;
+    private readonly IServiceProvider _serviceProvider;
+
+    public TaskExecutorService(ITaskProcessor processor, IServiceProvider serviceProvider)
+    {
+        _processor = processor;
+        _serviceProvider = serviceProvider;
+
+        processor.Execute = Execute;
+    }
+
+    private async Task Execute(TaskContext ctx)
+    {
+        await using var scope = _serviceProvider.CreateAsyncScope();
+
+        if (ctx.Topic == "internal:expression:v1")
+            await _processor.Executor.InvokeAsync(ctx,
+                    type => scope.ServiceProvider.GetRequiredService(type))
+                .ConfigureAwait(false);
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        await _processor.RunAsync(stoppingToken);
+    }
+}
 ```
 
 
