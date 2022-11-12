@@ -93,10 +93,13 @@ public class TaskProcessor : ITaskProcessor
 
             var q = task.Queue ?? queue;
 
-            if (!push.ContainsKey(q))
-                push.Add(q, new List<RedisValue>());
+            if (!task.DelayUntil.HasValue)
+            {
+                if (!push.ContainsKey(q))
+                    push.Add(q, new List<RedisValue>());
 
-            push[q].Add(taskId);
+                push[q].Add(taskId);
+            }
 
             tra.HashSetAsync(Prefix($"task:{taskId}"), new[]
             {
@@ -108,6 +111,12 @@ public class TaskProcessor : ITaskProcessor
                 new HashEntry("queue", task.Queue ?? queue),
                 new HashEntry("retries", task.Retries ?? _options.Retries)
             });
+
+            if (task.DelayUntil.HasValue)
+            {
+                tra.SortedSetAddAsync(Prefix($"queue:{queue}:pushback"), taskId,
+                    task.DelayUntil.Value.ToUnixTimeSeconds());
+            }
         }
 
         if (continuations?.Any() == true)
@@ -142,6 +151,7 @@ public class TaskProcessor : ITaskProcessor
 
         foreach (var q in push)
         {
+            tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
             tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
         }
@@ -189,6 +199,7 @@ public class TaskProcessor : ITaskProcessor
 
         foreach (var q in push)
         {
+            tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
             tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
         }
@@ -397,16 +408,20 @@ end
 
 local t = redis.call('time')[1];
 
-for i, v in ipairs(KEYS) do
-  local r = redis.call('zrange', v.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+local queues = redis.call('zrange', KEYS[1], 0, t+60, 'BYSCORE', 'LIMIT', 0, 1000);
+
+for i, v in ipairs(queues) do
+  local q = ""{Prefix("queue:")}""..v
+  local r = redis.call('zrange', q.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
   for j, w in ipairs(r) do
-    redis.call('lpush', v, w);
-    redis.call('zrem', v.."":pushback"", w);
-    redis.call('lrem', v.."":checkout"", 0, w);
+    redis.call('lpush', q, w);
+    redis.call('zadd', ""{Prefix("queues")}"", t, v);
+    redis.call('zrem', q.."":pushback"", w);
+    redis.call('lrem', q.."":checkout"", 0, w);
   end;
 end;
 
-local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 100);
+local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
 for k, batchId in ipairs(batches) do
   local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
   redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
@@ -414,21 +429,13 @@ for k, batchId in ipairs(batches) do
   redis.call('del', ""{Prefix("batch:")}""..batchId);
   redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
 end;
-", _queues); // TODO: All queues? not just the ones configured
+", new RedisKey[] { Prefix("queues") });
     }
 
     private string Prefix(string s)
     {
         if (!string.IsNullOrWhiteSpace(_options.Prefix))
             return $"{_options.Prefix}:{s}";
-        return s;
-    }
-
-    private string UnPrefix(string s)
-    {
-        if (!string.IsNullOrWhiteSpace(_options.Prefix))
-            if (s.StartsWith(_options.Prefix + ":"))
-                return s.Substring(_options.Prefix.Length + 1);
         return s;
     }
 
@@ -594,6 +601,8 @@ end;
 
     private async Task CompleteBatchAsync(TaskContext task, IDatabase db)
     {
+
+
         if (string.IsNullOrEmpty(task.BatchId))
             return;
 
@@ -612,12 +621,15 @@ if redis.replicate_commands~=nil then
   redis.replicate_commands() 
 end
 
+local t = redis.call('time')[1];
 local continuations = redis.call('lrange', KEYS[1], 0, 100);
 
 for i, taskId in ipairs(continuations) do
   local q = redis.call('hget', '{Prefix("task:")}'..taskId, 'queue');
+  redis.call('zadd', ""{Prefix("queues")}"", t, q);
   redis.call('lpush', '{Prefix("queue:")}'..q, taskId);
 end;
+
 ", new RedisKey[] { Prefix($"batch:{task.BatchId}:continuations") });
 #pragma warning restore CS4014
         await tra2.ExecuteAsync().ConfigureAwait(false);
@@ -713,6 +725,8 @@ return #(taskIds);
         var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "Etc/UTC");
         var next = (DateTimeOffset?)cronEx.GetNextOccurrence(now, tz);
 
+        var queue = task.Queue ?? schedule.Queue;
+
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
@@ -722,7 +736,7 @@ return #(taskIds);
             new HashEntry("timezone", schedule.Timezone ?? "Etc/UTC"),
             new HashEntry("data", task.Data),
             new HashEntry("topic", task.Topic),
-            new HashEntry("queue", task.Queue ?? schedule.Queue),
+            new HashEntry("queue", queue),
             new HashEntry("scope", schedule.Scope),
             new HashEntry("tenant", schedule.Tenant),
             new HashEntry("retries", task.Retries ?? _options.Retries),
@@ -732,6 +746,7 @@ return #(taskIds);
         }).ConfigureAwait(false);
         tra.SortedSetAddAsync(Prefix("schedules"), schedule.Id, next.Value.ToUnixTimeSeconds());
         tra.SortedSetAddAsync(Prefix($"schedules:{schedule.Tenant}"), schedule.Id, 0);
+        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 #pragma warning restore CS4014
         await tra.ExecuteAsync().ConfigureAwait(false);
     }
@@ -822,6 +837,8 @@ return #(taskIds);
 
         // enqueue
         tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId);
+        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+#pragma warning restore CS4014
 
         return new ScheduleInfo
         {
@@ -1016,19 +1033,19 @@ return #(taskIds);
         return await db.SortedSetLengthAsync(Prefix($"batches:{tenant}")).ConfigureAwait(false);
     }
 
-    // Cluster safe
     public async Task<ICollection<QueueInfo>> GetQueuesAsync()
     {
         var db = _redis.GetDatabase();
         var list = new List<QueueInfo>();
 
-        foreach (var q in _queues)
+        foreach (var q in await db.SortedSetRangeByScoreAsync(Prefix("queues")).ConfigureAwait(false))
             list.Add(new QueueInfo
             {
-                Name = UnPrefix(q!).Replace("queue:", string.Empty),
-                Length = await db.ListLengthAsync(q),
-                Checkout = await db.ListLengthAsync($"{q}:checkout"),
-                Deadletter = _options.Deadletter ? await db.ListLengthAsync($"{q}:deadletter") : 0
+                Name = (string?)q ?? string.Empty,
+                Length = await db.ListLengthAsync(Prefix($"queue:{q}")),
+                Checkout = await db.ListLengthAsync(Prefix($"queue:{q}:checkout")),
+                Pushback = await db.SortedSetLengthAsync(Prefix($"queue:{q}:pushback")),
+                Deadletter = await db.SortedSetLengthAsync(Prefix($"queue:{q}:deadletter"))
             });
 
         return list;
@@ -1044,11 +1061,10 @@ return #(taskIds);
             Name = name,
             Length = await db.ListLengthAsync(Prefix($"queue:{name}")),
             Checkout = await db.ListLengthAsync(Prefix($"queue:{name}:checkout")),
-            Deadletter = await db.ListLengthAsync(Prefix($"queue:{name}:deadletter"))
+            Pushback = await db.SortedSetLengthAsync(Prefix($"queue:{name}:pushback")),
+            Deadletter = await db.SortedSetLengthAsync(Prefix($"queue:{name}:deadletter"))
         };
     }
-
-    // Cluster safe
     public async Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
@@ -1075,8 +1091,6 @@ return #(taskIds);
 
         return list;
     }
-
-    // Cluster safe
     public async Task<ICollection<ScheduleInfo>> GetSchedulesAsync(string tenant, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
@@ -1128,13 +1142,14 @@ return #(taskIds);
             _taskProcessor = taskProcessor;
         }
 
-        public void Enqueue(Expression<Func<Task>> methodCall, string? queue = null)
+        public void Enqueue(Expression<Func<Task>> methodCall, string? queue = null, DateTimeOffset? delayUntil = null)
         {
             Tasks.Add(new TaskData
             {
                 Topic = "internal:expression:v1",
                 Data = _taskProcessor.Executor.Serialize(methodCall),
-                Queue = queue
+                Queue = queue,
+                DelayUntil = delayUntil
             });
         }
 
@@ -1148,13 +1163,14 @@ return #(taskIds);
             });
         }
 
-        public void Enqueue(Expression<Action> methodCall, string? queue = null)
+        public void Enqueue(Expression<Action> methodCall, string? queue = null, DateTimeOffset? delayUntil = null)
         {
             Tasks.Add(new TaskData
             {
                 Topic = "internal:expression:v1",
                 Data = _taskProcessor.Executor.Serialize(methodCall),
-                Queue = queue
+                Queue = queue,
+                DelayUntil = delayUntil
             });
         }
 
@@ -1185,7 +1201,6 @@ return #(taskIds);
         batchAction(batch);
         return AppendBatchAsync(queue, tenant, batchId, batch.Tasks);
     }
-
     public IRemoteExpressionExecutor Executor => _options.ExpressionExecutor;
 
     #endregion

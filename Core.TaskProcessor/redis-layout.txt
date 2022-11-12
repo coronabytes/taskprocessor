@@ -6,6 +6,7 @@
 
 # Queues
 
+{prefix}:queues						SORTED SET
 {prefix}:queue:{queue}				LIST
 {prefix}:queue:{queue}:deadletter	LIST
 {prefix}:queue:{queue}:event		PUBSUB
@@ -38,6 +39,7 @@
   member: {batch}
   score: unix timestamp (seconds) of eviction
 
+# Schedules
 
 {prefix}:schedule:{schedule}		HASH
   id		string

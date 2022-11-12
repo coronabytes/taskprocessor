@@ -7,4 +7,5 @@ public class TaskData
     public byte[] Data { get; set; } = Array.Empty<byte>();
     public string? Queue { get; set; } = null;
     public int? Retries { get; set; } = null;
+    public DateTimeOffset? DelayUntil { get; set; } = null;
 }
