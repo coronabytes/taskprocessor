@@ -15,7 +15,6 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
     MaxWorkers = 4,
     Retries = 3,
     Invisibility = TimeSpan.FromMinutes(5),
-    PollFrequency = TimeSpan.FromSeconds(10),
     Retention = TimeSpan.FromDays(7),
     UseHostedService = true
 });

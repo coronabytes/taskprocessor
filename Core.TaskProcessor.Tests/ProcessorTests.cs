@@ -50,7 +50,7 @@ public class ProcessorTests
             new()
             {
                 Topic = "t1",
-                DelayUntil = DateTimeOffset.UtcNow.AddMinutes(1)
+                //DelayUntil = DateTimeOffset.UtcNow.AddMinutes(1)
             }
             //new(),
             //new()
@@ -141,6 +141,15 @@ public class ProcessorTests
     [Fact]
     public async Task Cleanup()
     {
+        await _processor.PushbackAsync();
         await _processor.CleanUpAsync();
+    }
+
+    [Fact]
+    public async Task RetryTasks()
+    {
+        var tasks = await _processor.RetryDeadTasksAsync("q2", 3);
+
+        _output.WriteLine($"{tasks} retried");
     }
 }

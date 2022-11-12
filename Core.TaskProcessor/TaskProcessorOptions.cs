@@ -1,6 +1,3 @@
-using System.Reflection.Metadata.Ecma335;
-using System.Runtime.InteropServices.ComTypes;
-
 namespace Core.TaskProcessor;
 
 public class TaskProcessorOptions
@@ -22,15 +19,20 @@ public class TaskProcessorOptions
     public int MaxWorkers { get; set; } = Environment.ProcessorCount;
 
     /// <summary>
-    ///     how frequent to poll when no work available
-    ///     also schedule / cleanup
+    ///     main loop frequency
+    ///     fetches tasks when reactive events failed
     /// </summary>
-    public TimeSpan PollFrequency { get; set; } = TimeSpan.FromSeconds(5);
+    public TimeSpan BaseFrequency { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    ///     how frequent cleanups are executed
+    ///     within base frequency how often to run batch cleanups
     /// </summary>
-    public TimeSpan CleanUpFrequency { get; set; } = TimeSpan.FromMinutes(1);
+    public TimeSpan CleanUpFrequency { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    ///     within base frequency how often to run task pushbacks
+    /// </summary>
+    public TimeSpan PushbackFrequency { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
     ///     how long batches are kept

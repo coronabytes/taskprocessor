@@ -10,48 +10,26 @@ public class TaskProcessor : ITaskProcessor
 {
     private readonly ActionBlock<TaskContext> _actionBlock;
     private readonly TaskProcessorOptions _options;
-    private readonly RedisKey[] _queues;
+    private readonly RedisKey[] _queueKeys;
+    private readonly string[] _queuesNames;
     private readonly ConnectionMultiplexer _redis;
     private readonly CancellationTokenSource _shutdown = new();
     private readonly ConcurrentDictionary<string, TaskContext> _tasks = new();
     private DateTime _nextCleanup = DateTime.UtcNow;
+    private DateTime _nextPushback = DateTime.UtcNow;
 
     public TaskProcessor(TaskProcessorOptions options)
     {
         _options = options;
-        _queues = options.Queues.Select(x => (RedisKey)Prefix($"queue:{x}")).ToArray();
+        _queueKeys = options.Queues.Select(x => (RedisKey)Prefix($"queue:{x}")).ToArray();
+        _queuesNames = options.Queues.ToArray();
 
         _redis = ConnectionMultiplexer.Connect(options.Redis);
-
-        // batch canceled -> search running tasks and terminate
-        _redis.GetSubscriber().Subscribe(Prefix("global:cancel"), (channel, value) =>
-        {
-            var batchId = (string)value!;
-
-            foreach (var task in _tasks.Values)
-                try
-                {
-                    if (task.BatchId == batchId && !task.IsCancellation)
-                        task.Cancel();
-                }
-                catch (Exception)
-                {
-                    //
-                }
-        });
-
-        // global run state changed -> pause/resume tasks + schedules
-        _redis.GetSubscriber().Subscribe(Prefix("global:run"), (channel, value) => { IsPaused = !(bool)value; });
 
         _actionBlock = new ActionBlock<TaskContext>(Process, new ExecutionDataflowBlockOptions
         {
             MaxDegreeOfParallelism = _options.MaxWorkers
         });
-
-        foreach (var q in _options.Queues)
-            // new tasks available -> fetch
-            _redis.GetSubscriber().Subscribe(Prefix($"queue:{q}:event"),
-                (channel, value) => { FetchAsync().ContinueWith(_ => { }); });
     }
 
     public Func<TaskContext, Task> Execute { get; set; } = _ => Task.CompletedTask;
@@ -231,10 +209,6 @@ public class TaskProcessor : ITaskProcessor
             var db = _redis.GetDatabase();
 
             var res = await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
 for i, queue in ipairs(KEYS) do
 local taskId = redis.call('rpoplpush', queue, queue.."":checkout"");
 if taskId then
@@ -251,7 +225,7 @@ if taskId then
   return {{queue, taskId, taskData}}; 
 end;
 end
-", _queues, new RedisValue[] { (long)_options.Retention.TotalSeconds });
+", _queueKeys, new RedisValue[] { (long)_options.Retention.TotalSeconds });
 
             if (res.IsNull)
                 return false;
@@ -353,13 +327,42 @@ end
     {
         var cancel = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token).Token;
 
-        IsPaused = !(bool)await _redis.GetDatabase().StringGetAsync(Prefix("global:run"));
+        var db = _redis.GetDatabase();
+
+        IsPaused = !(bool)await db.StringGetAsync(Prefix("global:run"));
+
+        _redis.GetSubscriber().Subscribe(Prefix("global:cancel"), (channel, value) =>
+        {
+            var batchId = (string)value!;
+
+            foreach (var task in _tasks.Values)
+                try
+                {
+                    if (task.BatchId == batchId && !task.IsCancellation)
+                        task.Cancel();
+                }
+                catch (Exception)
+                {
+                    //
+                }
+        });
+
+        _redis.GetSubscriber().Subscribe(Prefix("global:run"), (channel, value) => { IsPaused = !(bool)value; });
+
+        foreach (var q in _options.Queues)
+            _redis.GetSubscriber().Subscribe(Prefix($"queue:{q}:event"),
+                (channel, value) => { FetchAsync().ContinueWith(_ => { }); });
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+
+        foreach (var q in _queuesNames)
+            await db.SortedSetAddAsync(Prefix("queues"), q, now);
 
         while (!cancel.IsCancellationRequested)
         {
             if (IsPaused)
             {
-                await Task.Delay(_options.PollFrequency, cancel).ContinueWith(_ => { });
+                await Task.Delay(_options.BaseFrequency, cancel).ContinueWith(_ => { });
                 continue;
             }
 
@@ -374,9 +377,10 @@ end
             } while (_actionBlock.InputCount < _options.MaxWorkers && gotWork);
 
             await ExecuteSchedulesAsync();
+            await PushbackAsync();
             await CleanUpAsync();
 
-            await Task.Delay(_options.PollFrequency, cancel).ContinueWith(_ => { });
+            await Task.Delay(_options.BaseFrequency, cancel).ContinueWith(_ => { });
         }
     }
 
@@ -385,6 +389,38 @@ end
         var db = _redis.GetDatabase();
         return db.SortedSetUpdateAsync(Prefix($"queue:{queue}:pushback"), taskId,
             DateTimeOffset.UtcNow.Add(span).ToUnixTimeSeconds());
+    }
+
+    public async Task PushbackAsync()
+    {
+        if (_nextPushback > DateTime.UtcNow)
+            return;
+        _nextPushback = DateTime.UtcNow.Add(_options.PushbackFrequency);
+
+        var db = _redis.GetDatabase();
+
+        var lockTaken = await db.LockTakeAsync(Prefix("pushback-lock"), Environment.MachineName,
+            _options.PushbackFrequency).ConfigureAwait(false);
+
+        if (!lockTaken)
+            return;
+
+        await db.ScriptEvaluateAsync($@"
+local t = redis.call('time')[1];
+
+local queues = redis.call('zrange', KEYS[1], 0, t+60, 'BYSCORE', 'LIMIT', 0, 1000);
+
+for i, v in ipairs(queues) do
+  local q = ""{Prefix("queue:")}""..v
+  local r = redis.call('zrange', q.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
+  for j, w in ipairs(r) do
+    redis.call('lpush', q, w);
+    redis.call('zadd', ""{Prefix("queues")}"", t, v);
+    redis.call('zrem', q.."":pushback"", w);
+    redis.call('lrem', q.."":checkout"", 0, w);
+  end;
+end;
+", new RedisKey[] { Prefix("queues") });
     }
 
     public async Task CleanUpAsync()
@@ -402,26 +438,9 @@ end
             return;
 
         await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
 local t = redis.call('time')[1];
-
-local queues = redis.call('zrange', KEYS[1], 0, t+60, 'BYSCORE', 'LIMIT', 0, 1000);
-
-for i, v in ipairs(queues) do
-  local q = ""{Prefix("queue:")}""..v
-  local r = redis.call('zrange', q.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
-  for j, w in ipairs(r) do
-    redis.call('lpush', q, w);
-    redis.call('zadd', ""{Prefix("queues")}"", t, v);
-    redis.call('zrem', q.."":pushback"", w);
-    redis.call('lrem', q.."":checkout"", 0, w);
-  end;
-end;
-
 local batches = redis.call('zrange', ""{Prefix("batches:cleanup")}"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
+
 for k, batchId in ipairs(batches) do
   local tenant = redis.call('hget', ""{Prefix("batch:")}""..batchId, ""tenant"");
   redis.call('zrem', ""{Prefix("batches:cleanup")}"", batchId);
@@ -429,7 +448,7 @@ for k, batchId in ipairs(batches) do
   redis.call('del', ""{Prefix("batch:")}""..batchId);
   redis.call('del', ""{Prefix("batch:")}""..batchId.."":continuations"");
 end;
-", new RedisKey[] { Prefix("queues") });
+", new RedisKey[] { Prefix("batches:cleanup") });
     }
 
     private string Prefix(string s)
@@ -484,9 +503,9 @@ end;
                 retries = await db.HashDecrementAsync(Prefix($"task:{task.TaskId}"), "retries")
                     .ConfigureAwait(false);
 
-                if (retries <= 0)
+                if (retries < 0)
                 {
-                    var remaining = Task.FromResult(1L);
+                    //var remaining = Task.FromResult(1L);
 
                     var tra = db.CreateTransaction();
 #pragma warning disable CS4014
@@ -501,7 +520,7 @@ end;
                         {
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
                                 flags: CommandFlags.FireAndForget);
-                            remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
+                            //remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
                         }
 
                         if (_options.Deadletter)
@@ -513,8 +532,9 @@ end;
 #pragma warning restore CS4014
                     await tra.ExecuteAsync().ConfigureAwait(false);
 
-                    if (await remaining <= 0 && !task.IsContinuation)
-                        await CompleteBatchAsync(task, db);
+                    // failures can no longer complete batch
+                    //if (await remaining <= 0 && !task.IsContinuation)
+                    //    await CompleteBatchAsync(task, db);
                 }
                 else
                 {
@@ -601,8 +621,6 @@ end;
 
     private async Task CompleteBatchAsync(TaskContext task, IDatabase db)
     {
-
-
         if (string.IsNullOrEmpty(task.BatchId))
             return;
 
@@ -617,10 +635,6 @@ end;
         });
         // push continuations into their queues
         tra2.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
 local t = redis.call('time')[1];
 local continuations = redis.call('lrange', KEYS[1], 0, 100);
 
@@ -628,6 +642,7 @@ for i, taskId in ipairs(continuations) do
   local q = redis.call('hget', '{Prefix("task:")}'..taskId, 'queue');
   redis.call('zadd', ""{Prefix("queues")}"", t, q);
   redis.call('lpush', '{Prefix("queue:")}'..q, taskId);
+  redis.call('publish', '{Prefix("queue:")}'..q..':event', 'fetch');
 end;
 
 ", new RedisKey[] { Prefix($"batch:{task.BatchId}:continuations") });
@@ -635,28 +650,29 @@ end;
         await tra2.ExecuteAsync().ConfigureAwait(false);
     }
 
-    public async Task<long> RequeueDeadletterAsync(string queue, int? retries = null, long? count = null)
+    public async Task<long> RetryDeadTasksAsync(string queue, int? retries = null, long? count = null)
     {
         var db = _redis.GetDatabase();
 
         var res = await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
 local t = redis.call('time')[1];
 local taskIds = redis.call('zrange', KEYS[2], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
 
 for j, taskId in ipairs(taskIds) do
-  redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);  
+  local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
+  redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);
+  redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
+  redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
   redis.call('lpush', KEYS[1], taskId);
   redis.call('zrem', KEYS[2], taskId);
+  redis.call('publish', KEYS[1]..':event', 'fetch');
 end;
 
 return #(taskIds);
 ", new RedisKey[]
         {
-            Prefix($"queue:{queue}"), Prefix($"queue:{queue}:deadletter")
+            Prefix($"queue:{queue}"), 
+            Prefix($"queue:{queue}:deadletter")
         }, new RedisValue[]
         {
             count ?? 100, retries ?? _options.Retries
@@ -665,15 +681,11 @@ return #(taskIds);
         return (long)res;
     }
 
-    public async Task<long> DiscardDeadletterAsync(string queue, long? count = null)
+    public async Task<long> DiscardDeadTasksAsync(string queue, long? count = null)
     {
         var db = _redis.GetDatabase();
 
         var res = await db.ScriptEvaluateAsync($@"
-if redis.replicate_commands~=nil then 
-  redis.replicate_commands() 
-end
-
 local t = redis.call('time')[1];
 local taskIds = redis.call('zrange', KEYS[1], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
 
@@ -836,8 +848,9 @@ return #(taskIds);
         }, CommandFlags.FireAndForget);
 
         // enqueue
-        tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId);
-        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId, flags: CommandFlags.FireAndForget);
+        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), CommandFlags.FireAndForget);
+        tra.PublishAsync(Prefix($"queue:{queue}:event"), "fetch", CommandFlags.FireAndForget);
 #pragma warning restore CS4014
 
         return new ScheduleInfo

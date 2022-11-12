@@ -142,4 +142,7 @@ public interface ITaskProcessor
 
     Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, Action<IBatchEnqueue> batchAction);
 
+    Task PushbackAsync();
+    Task<long> RetryDeadTasksAsync(string queue, int? retries = null, long? count = null);
+    Task<long> DiscardDeadTasksAsync(string queue, long? count = null);
 }
