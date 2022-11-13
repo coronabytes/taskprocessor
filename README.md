@@ -8,7 +8,7 @@ dotnet add package Core.TaskProcessor
 # .NET Background Task Processing Engine
 *Hangfire Pro Redis* except:
 - open source (Apache 2.0)
-- exclusive redis/elasticache 6+ storage engine (cluster mode supported)
+- exclusive redis/elasticache 6.2+ storage engine (cluster mode supported)
 - multi tenancy
 - global pause and resume of all processing
 - every (non-recurring) task belongs to a batch
