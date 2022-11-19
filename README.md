@@ -27,9 +27,18 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
     MaxWorkers = 4, // action block concurrency limit
     Retries = 3,
     Invisibility = TimeSpan.FromMinutes(5), // task will be redelivered when taking longer than this
-    PollFrequency = TimeSpan.FromSeconds(10), // schedule + cleanup frequency
+    BaseFrequency = TimeSpan.FromSeconds(5), // fetches tasks when reactive events failed
+    PushbackFrequency = TimeSpan.FromSeconds(10), // how often to run task retry/delay pushbacks
+    CleanUpFrequency = TimeSpan.FromMinutes(5), //  how often to run batch cleanups
     Retention = TimeSpan.FromDays(7), // batch information will be kept this long
-    UseHostedService = true // use supplied background worker service
+    UseHostedService = true, // use supplied background worker service
+    OnTaskFailedDelay = (ctx, retry) => // delay retry on task failure
+        Task.FromResult(retry switch
+        {
+            2 => TimeSpan.FromSeconds(5),
+            1 => TimeSpan.FromSeconds(60),
+            _ => (TimeSpan?)null,
+        })
 });
 ```
 
@@ -39,7 +48,9 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
 var batchId = await _processor.EnqueueBatchAsync("default", "my-tenant", batch =>
 {
     batch.Enqueue(() => _someScopedService.DoSomethingAsync("hello", CancellationToken.None));
-    batch.Enqueue(() => _someScopedService.DoSomethingAsync("world", CancellationToken.None));
+    
+    batch.Enqueue(() => _someScopedService.DoSomethingAsync("world", CancellationToken.None), 
+      delayUntil: DateTimeOffset.UtcNow.AddSeconds(30));
 
     batch.ContinueWith(() => _someScopedService.DoSomething("!"), "high");
 })
