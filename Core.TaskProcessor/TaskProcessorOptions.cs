@@ -64,9 +64,10 @@ public class TaskProcessorOptions
     public IRemoteExpressionExecutor ExpressionExecutor { get; set; } = new RemoteExpressionExecutor();
 
     /// <summary>
-    ///   when tasks throws exception delay re-enqueue until TimeSpan
-    ///   number of retries left
-    ///   null = instant (default)
+    ///     when tasks throws exception delay re-enqueue until TimeSpan
+    ///     number of retries left
+    ///     null = instant (default)
     /// </summary>
-    public Func<TaskContext, long, Task<TimeSpan?>> OnTaskFailedDelay { get; set; } = (_, _) => Task.FromResult<TimeSpan?>(null);
+    public Func<TaskContext, long, Task<TimeSpan?>> OnTaskFailedDelay { get; set; } =
+        (_, _) => Task.FromResult<TimeSpan?>(null);
 }

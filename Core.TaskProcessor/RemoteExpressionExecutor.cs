@@ -18,8 +18,8 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             Type = SerializeType(type!) ?? string.Empty,
             Method = method.Name,
             Signature = method.GetParameters().Select(x => SerializeType(x.ParameterType)).ToList()!,
-            Arguments = callExpression.Arguments.Select(x => { return SerializeArgument(x); }).ToList(),
-            Generics = method.GetGenericArguments().Select(x => SerializeType(x)).ToList()!,
+            Arguments = callExpression.Arguments.Select(SerializeArgument).ToList(),
+            Generics = method.GetGenericArguments().Select(SerializeType).ToList()!
         };
 
         return SerializeBinary(info);
@@ -32,12 +32,14 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
         var type = DeserializeType(info.Type)!;
         var signature = info.Signature.Select(DeserializeType).ToArray();
-        
+
         MethodInfo? method;
 
         if (info.Generics?.Any() == true)
         {
-            var genMethod = type.GetMethod(info.Method, BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy);
+            var genMethod = type.GetMethod(info.Method,
+                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance |
+                BindingFlags.FlattenHierarchy);
 
             if (genMethod == null)
                 throw new MissingMethodException(info.Type, info.Method);
@@ -49,14 +51,12 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
         else
         {
             method = type.GetMethod(info.Method,
-                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance | BindingFlags.FlattenHierarchy,
+                BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance |
+                BindingFlags.FlattenHierarchy,
                 signature!);
         }
 
-        if (method == null)
-        {
-            throw new MissingMethodException(info.Type, info.Method);
-        }
+        if (method == null) throw new MissingMethodException(info.Type, info.Method);
 
         var args = new List<object?>();
 

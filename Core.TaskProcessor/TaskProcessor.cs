@@ -91,10 +91,8 @@ public class TaskProcessor : ITaskProcessor
             });
 
             if (task.DelayUntil.HasValue)
-            {
                 tra.SortedSetAddAsync(Prefix($"queue:{queue}:pushback"), taskId,
                     task.DelayUntil.Value.ToUnixTimeSeconds());
-            }
         }
 
         if (continuations?.Any() == true)
@@ -451,6 +449,62 @@ end;
 ", new RedisKey[] { Prefix("batches:cleanup") });
     }
 
+    public async Task<long> RetryDeadTasksAsync(string queue, int? retries = null, long? count = null)
+    {
+        var db = _redis.GetDatabase();
+
+        var res = await db.ScriptEvaluateAsync($@"
+local t = redis.call('time')[1];
+local taskIds = redis.call('zrange', KEYS[2], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
+
+for j, taskId in ipairs(taskIds) do
+  local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
+  redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);
+  redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
+  redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
+  redis.call('lpush', KEYS[1], taskId);
+  redis.call('zrem', KEYS[2], taskId);
+  redis.call('publish', KEYS[1]..':event', 'fetch');
+end;
+
+return #(taskIds);
+", new RedisKey[]
+        {
+            Prefix($"queue:{queue}"),
+            Prefix($"queue:{queue}:deadletter")
+        }, new RedisValue[]
+        {
+            count ?? 100, retries ?? _options.Retries
+        }).ConfigureAwait(false);
+
+        return (long)res;
+    }
+
+    public async Task<long> DiscardDeadTasksAsync(string queue, long? count = null)
+    {
+        var db = _redis.GetDatabase();
+
+        var res = await db.ScriptEvaluateAsync($@"
+local t = redis.call('time')[1];
+local taskIds = redis.call('zrange', KEYS[1], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
+
+for j, taskId in ipairs(taskIds) do
+  redis.call('zrem', KEYS[1], taskId);
+  redis.call('del', '{Prefix("task:")}'..taskId);  
+end;
+
+return #(taskIds);
+", new RedisKey[]
+        {
+            Prefix($"queue:{queue}:deadletter")
+        }, new RedisValue[]
+        {
+            count ?? 100
+        }).ConfigureAwait(false);
+
+        return (long)res;
+    }
+
     private string Prefix(string s)
     {
         if (!string.IsNullOrWhiteSpace(_options.Prefix))
@@ -517,12 +571,9 @@ end;
                     if (!task.IsContinuation)
                     {
                         if (!string.IsNullOrEmpty(task.BatchId))
-                        {
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
                                 flags: CommandFlags.FireAndForget);
-                            //remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
-                        }
-
+                        //remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
                         if (_options.Deadletter)
                             tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds());
@@ -591,16 +642,17 @@ end;
 
                 if (delay.HasValue)
                 {
-                    tra.SortedSetUpdateAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId, 
+                    tra.SortedSetUpdateAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
                         DateTimeOffset.UtcNow.Add(delay.Value).ToUnixTimeSeconds(), flags: CommandFlags.FireAndForget);
                 }
                 else
                 {
-                    tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId, flags: CommandFlags.FireAndForget);
+                    tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId,
+                        flags: CommandFlags.FireAndForget);
                     tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
                         CommandFlags.FireAndForget);
                 }
-                
+
                 if (!task.IsContinuation && string.IsNullOrEmpty(task.BatchId))
                     tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                         (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
@@ -648,62 +700,6 @@ end;
 ", new RedisKey[] { Prefix($"batch:{task.BatchId}:continuations") });
 #pragma warning restore CS4014
         await tra2.ExecuteAsync().ConfigureAwait(false);
-    }
-
-    public async Task<long> RetryDeadTasksAsync(string queue, int? retries = null, long? count = null)
-    {
-        var db = _redis.GetDatabase();
-
-        var res = await db.ScriptEvaluateAsync($@"
-local t = redis.call('time')[1];
-local taskIds = redis.call('zrange', KEYS[2], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
-
-for j, taskId in ipairs(taskIds) do
-  local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
-  redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);
-  redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
-  redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
-  redis.call('lpush', KEYS[1], taskId);
-  redis.call('zrem', KEYS[2], taskId);
-  redis.call('publish', KEYS[1]..':event', 'fetch');
-end;
-
-return #(taskIds);
-", new RedisKey[]
-        {
-            Prefix($"queue:{queue}"), 
-            Prefix($"queue:{queue}:deadletter")
-        }, new RedisValue[]
-        {
-            count ?? 100, retries ?? _options.Retries
-        }).ConfigureAwait(false);
-
-        return (long)res;
-    }
-
-    public async Task<long> DiscardDeadTasksAsync(string queue, long? count = null)
-    {
-        var db = _redis.GetDatabase();
-
-        var res = await db.ScriptEvaluateAsync($@"
-local t = redis.call('time')[1];
-local taskIds = redis.call('zrange', KEYS[1], 0, t, 'BYSCORE', 'LIMIT', 0, ARGV[1]);
-
-for j, taskId in ipairs(taskIds) do
-  redis.call('zrem', KEYS[1], taskId);
-  redis.call('del', '{Prefix("task:")}'..taskId);  
-end;
-
-return #(taskIds);
-", new RedisKey[]
-        {
-            Prefix($"queue:{queue}:deadletter")
-        }, new RedisValue[]
-        {
-            count ?? 100
-        }).ConfigureAwait(false);
-
-        return (long)res;
     }
 
     #region Control
@@ -769,7 +765,7 @@ return #(taskIds);
         {
             Topic = "internal:expression:v1",
             Data = _options.ExpressionExecutor.Serialize(methodCall),
-            Queue = schedule.Queue,
+            Queue = schedule.Queue
         });
     }
 
@@ -779,7 +775,7 @@ return #(taskIds);
         {
             Topic = "internal:expression:v1",
             Data = _options.ExpressionExecutor.Serialize(methodCall),
-            Queue = schedule.Queue,
+            Queue = schedule.Queue
         });
     }
 
@@ -849,7 +845,8 @@ return #(taskIds);
 
         // enqueue
         tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId, flags: CommandFlags.FireAndForget);
-        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), CommandFlags.FireAndForget);
+        tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            CommandFlags.FireAndForget);
         tra.PublishAsync(Prefix($"queue:{queue}:event"), "fetch", CommandFlags.FireAndForget);
 #pragma warning restore CS4014
 
@@ -1078,6 +1075,7 @@ return #(taskIds);
             Deadletter = await db.SortedSetLengthAsync(Prefix($"queue:{name}:deadletter"))
         };
     }
+
     public async Task<ICollection<TaskInfo>> GetTasksInQueueAsync(string queue, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
@@ -1104,6 +1102,7 @@ return #(taskIds);
 
         return list;
     }
+
     public async Task<ICollection<ScheduleInfo>> GetSchedulesAsync(string tenant, long skip = 0, long take = 50)
     {
         var db = _redis.GetDatabase();
@@ -1129,7 +1128,7 @@ return #(taskIds);
                 Cron = schedule["cron"]!,
                 Timezone = schedule["timezone"]!,
                 Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime,
-                Unique = (bool)schedule["unique"],
+                Unique = (bool)schedule["unique"]
             });
         }
 
@@ -1154,6 +1153,9 @@ return #(taskIds);
         {
             _taskProcessor = taskProcessor;
         }
+
+        public List<TaskData> Tasks { get; } = new();
+        public List<TaskData> Continuations { get; } = new();
 
         public void Enqueue(Expression<Func<Task>> methodCall, string? queue = null, DateTimeOffset? delayUntil = null)
         {
@@ -1196,9 +1198,6 @@ return #(taskIds);
                 Queue = queue
             });
         }
-
-        public List<TaskData> Tasks { get; } = new();
-        public List<TaskData> Continuations { get; } = new();
     }
 
     public Task<string> EnqueueBatchAsync(string queue, string tenant, Action<IBatchContinue> batchAction)
@@ -1214,6 +1213,7 @@ return #(taskIds);
         batchAction(batch);
         return AppendBatchAsync(queue, tenant, batchId, batch.Tasks);
     }
+
     public IRemoteExpressionExecutor Executor => _options.ExpressionExecutor;
 
     #endregion

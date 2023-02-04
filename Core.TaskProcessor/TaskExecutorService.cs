@@ -21,8 +21,7 @@ internal class TaskExecutorService : BackgroundService
         await using var scope = _serviceProvider.CreateAsyncScope();
 
         if (ctx.Topic == "internal:expression:v1")
-            await _processor.Executor.InvokeAsync(ctx,
-                    type => scope.ServiceProvider.GetRequiredService(type))
+            await _processor.Executor.InvokeAsync(ctx, scope.ServiceProvider.GetRequiredService)
                 .ConfigureAwait(false);
     }
 
