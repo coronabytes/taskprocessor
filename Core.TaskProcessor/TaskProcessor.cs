@@ -622,8 +622,17 @@ return #(taskIds);
                     await _options.OnTaskEnd(task).ConfigureAwait(false);
                 }
             }
-            catch
+            catch (Exception ex)
             {
+                try
+                {
+                    await _options.OnTaskError(task, ex).ConfigureAwait(false);
+                }
+                catch
+                {
+                    //
+                }
+
                 TimeSpan? delay = null;
 
                 try

@@ -56,6 +56,7 @@ public class TaskProcessorOptions
 
     public Func<TaskContext, Task> OnTaskStart { get; set; } = _ => Task.CompletedTask;
     public Func<TaskContext, Task> OnTaskEnd { get; set; } = _ => Task.CompletedTask;
+    public Func<TaskContext, Exception, Task> OnTaskError { get; set; } = (_, _) => Task.CompletedTask;
 
     public string Redis { get; set; } = string.Empty;
 

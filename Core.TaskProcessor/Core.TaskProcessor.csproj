@@ -23,7 +23,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="Cronos" Version="0.7.1" />
-		<PackageReference Include="StackExchange.Redis" Version="2.6.96" />
+		<PackageReference Include="StackExchange.Redis" Version="2.6.104" />
 	</ItemGroup>
 	
 	<ItemGroup Condition=" '$(TargetFramework)' == 'net6.0' ">
