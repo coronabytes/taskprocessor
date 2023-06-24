@@ -129,7 +129,8 @@ public class TaskProcessor : ITaskProcessor
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
-            tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
+            tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q.Key}:event")), "fetch");
+
         }
 
 #pragma warning restore CS4014
@@ -177,7 +178,7 @@ public class TaskProcessor : ITaskProcessor
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
-            tra.PublishAsync(Prefix($"queue:{q.Key}:event"), "fetch");
+            tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q.Key}:event")), "fetch");
         }
 #pragma warning restore CS4014
         return await tra.ExecuteAsync().ConfigureAwait(false);
@@ -190,7 +191,7 @@ public class TaskProcessor : ITaskProcessor
         var tra = db.CreateTransaction();
 #pragma warning disable CS4014
         var ok = tra.HashSetAsync(Prefix($"batch:{batchId}"), "state", "cancel", When.Exists);
-        tra.PublishAsync(Prefix("global:cancel"), batchId, CommandFlags.FireAndForget);
+        tra.PublishAsync(RedisChannel.Literal(Prefix("global:cancel")), batchId, CommandFlags.FireAndForget);
 #pragma warning restore CS4014
         await tra.ExecuteAsync();
 
@@ -329,7 +330,7 @@ end
 
         IsPaused = !(bool)await db.StringGetAsync(Prefix("global:run"));
 
-        _redis.GetSubscriber().Subscribe(Prefix("global:cancel"), (channel, value) =>
+        _redis.GetSubscriber().Subscribe(RedisChannel.Literal(Prefix("global:cancel")), (channel, value) =>
         {
             var batchId = (string)value!;
 
@@ -345,10 +346,10 @@ end
                 }
         });
 
-        _redis.GetSubscriber().Subscribe(Prefix("global:run"), (channel, value) => { IsPaused = !(bool)value; });
+        _redis.GetSubscriber().Subscribe(RedisChannel.Literal(Prefix("global:run")), (channel, value) => { IsPaused = !(bool)value; });
 
         foreach (var q in _options.Queues)
-            _redis.GetSubscriber().Subscribe(Prefix($"queue:{q}:event"),
+            _redis.GetSubscriber().Subscribe(RedisChannel.Literal(Prefix($"queue:{q}:event")),
                 (channel, value) => { FetchAsync().ContinueWith(_ => { }); });
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
@@ -718,13 +719,13 @@ end;
     public async Task PauseAsync()
     {
         await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 0);
-        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), false);
+        await _redis.GetSubscriber().PublishAsync(RedisChannel.Literal(Prefix("global:run")), false);
     }
 
     public async Task ResumeAsync()
     {
         await _redis.GetDatabase().StringSetAsync(Prefix("global:run"), 1);
-        await _redis.GetSubscriber().PublishAsync(Prefix("global:run"), true);
+        await _redis.GetSubscriber().PublishAsync(RedisChannel.Literal(Prefix("global:run")), true);
     }
 
     #endregion
@@ -856,7 +857,7 @@ end;
         tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId, flags: CommandFlags.FireAndForget);
         tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             CommandFlags.FireAndForget);
-        tra.PublishAsync(Prefix($"queue:{queue}:event"), "fetch", CommandFlags.FireAndForget);
+        tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{queue}:event")), "fetch", CommandFlags.FireAndForget);
 #pragma warning restore CS4014
 
         return new ScheduleInfo

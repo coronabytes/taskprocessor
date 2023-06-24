@@ -101,9 +101,9 @@ public class ExpressionTests
 
     private class SomeData
     {
-        public string Name { get; set; }
+        public string Name { get; set; } = string.Empty;
         public decimal Value { get; set; }
-        public HashSet<string> Tags { get; set; }
+        public HashSet<string> Tags { get; set; } = new();
     }
 
     private abstract class SomeBaseData
@@ -118,8 +118,8 @@ public class ExpressionTests
 
     private class SomeData<T, V> : SomeBaseData
     {
-        public T Name { get; set; }
-        public HashSet<V> Tags { get; set; }
+        public T Name { get; set; } = default!;
+        public HashSet<V> Tags { get; set; } = new();
 
         public override string Print()
         {

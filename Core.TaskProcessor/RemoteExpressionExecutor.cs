@@ -46,7 +46,7 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
 
             var genArgs = info.Generics.Select(DeserializeType).ToArray();
 
-            method = genMethod.MakeGenericMethod(genArgs);
+            method = genMethod.MakeGenericMethod(genArgs!);
         }
         else
         {
