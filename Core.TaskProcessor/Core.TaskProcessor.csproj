@@ -23,12 +23,12 @@
 
 	<ItemGroup>
 		<PackageReference Include="Cronos" Version="0.7.1" />
-		<PackageReference Include="StackExchange.Redis" Version="2.6.104" />
+		<PackageReference Include="StackExchange.Redis" Version="2.6.116" />
 	</ItemGroup>
 	
 	<ItemGroup Condition=" '$(TargetFramework)' == 'net6.0' ">
-		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="7.0.0" />
-		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="7.0.0" />
+		<PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="6.0.0" />
+		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="6.0.0" />
     </ItemGroup>
 	
 	<ItemGroup Condition=" '$(TargetFramework)' == 'net7.0' ">
