@@ -732,16 +732,25 @@ end;
 
     #region Schedule
 
+    private DateTimeOffset? NextCronOccurrence(string cron, string? timezone)
+    {
+        var tz = TimeZoneInfo.FindSystemTimeZoneById(timezone ?? "Etc/UTC");
+        var now = DateTime.UtcNow;
+
+        var splits = cron.Split("|", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var next = splits.Select(x=> (DateTimeOffset?)CronExpression.Parse(x).GetNextOccurrence(now, tz))
+            .Where(x=>x.HasValue)
+            .MinBy(x=>x!.Value);
+
+        return next;
+    }
+
     public async Task UpsertScheduleAsync(ScheduleData schedule, TaskData task)
     {
         if (task.Queue == null)
             throw new ArgumentNullException(nameof(task.Queue));
 
-        var cronEx = CronExpression.Parse(schedule.Cron);
-        var now = DateTime.UtcNow;
-
-        var tz = TimeZoneInfo.FindSystemTimeZoneById(schedule.Timezone ?? "Etc/UTC");
-        var next = (DateTimeOffset?)cronEx.GetNextOccurrence(now, tz);
+        var next = NextCronOccurrence(schedule.Cron, schedule.Timezone);
 
         var queue = task.Queue ?? schedule.Queue;
 
@@ -901,15 +910,7 @@ end;
                     // when recurring
                     if (!string.IsNullOrWhiteSpace(info.Cron))
                     {
-                        var cron = CronExpression.Parse(info.Cron);
-                        var tz = TimeZoneInfo.FindSystemTimeZoneById(info.Timezone);
-                        //var n = DateTimeOffset.FromUnixTimeSeconds((long)nextOffset);
-
-                        // TODO: ???
-                        var n = DateTimeOffset.UtcNow;
-
-                        var next = cron.GetNextOccurrence(n, tz);
-
+                        var next = NextCronOccurrence(info.Cron, info.Timezone);
 
 #pragma warning disable CS4014
                         if (next.HasValue)
@@ -940,14 +941,7 @@ end;
                         // transaction aborted -> update schedule
                         if (!string.IsNullOrWhiteSpace(info.Cron))
                         {
-                            var cron = CronExpression.Parse(info.Cron);
-                            var tz = TimeZoneInfo.FindSystemTimeZoneById(info.Timezone);
-
-                            //var n = DateTimeOffset.FromUnixTimeSeconds((long)nextOffset);
-                            // TODO: ???
-                            var n = DateTimeOffset.UtcNow;
-
-                            var next = cron.GetNextOccurrence(n, tz);
+                            var next = NextCronOccurrence(info.Cron, info.Timezone);
 
                             if (next.HasValue)
                             {
