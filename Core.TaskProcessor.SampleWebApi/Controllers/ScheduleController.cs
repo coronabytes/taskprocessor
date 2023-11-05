@@ -24,9 +24,11 @@ public class ScheduleController : ControllerBase
         await _processor.UpsertScheduleAsync(new ScheduleData
             {
                 Id = "my-unique-id",
-                Cron = "*/1 * * * *",
+                Cron = "*/5 * * * * | */3 * * * * | 0 0 L * *",
+                Timezone = "Europe/Berlin",
                 Tenant = "core",
                 Unique = true,
+                Expire = TimeSpan.FromSeconds(30),
                 Queue = "default"
             }, () => _someScopedService.DoSomethingAsync("scheduled task!", CancellationToken.None))
             .ConfigureAwait(false);

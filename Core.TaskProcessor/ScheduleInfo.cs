@@ -6,6 +6,7 @@ public class ScheduleInfo
     public string Timezone { get; set; } = string.Empty;
     public string Scope { get; set; } = string.Empty;
     public string Cron { get; set; } = string.Empty;
+    public TimeSpan? Expire { get; set; }
     public DateTime? Next { get; set; }
     public bool Unique { get; set; }
 }

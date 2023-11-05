@@ -769,7 +769,8 @@ end;
             new HashEntry("retries", task.Retries ?? _options.Retries),
             new HashEntry("cron", schedule.Cron),
             new HashEntry("next", next!.Value.ToUnixTimeSeconds()),
-            new HashEntry("unique", schedule.Unique)
+            new HashEntry("unique", schedule.Unique),
+            new HashEntry("expire", (long)(schedule.Expire?.TotalSeconds ?? -1d)),
         }).ConfigureAwait(false);
         tra.SortedSetAddAsync(Prefix("schedules"), schedule.Id, next.Value.ToUnixTimeSeconds());
         tra.SortedSetAddAsync(Prefix($"schedules:{schedule.Tenant}"), schedule.Id, 0);
@@ -817,7 +818,7 @@ end;
         var db = _redis.GetDatabase();
         var tra = db.CreateTransaction();
 
-        var info = await TriggerScheduleInternal(id, db, tra).ConfigureAwait(false);
+        var info = await TriggerScheduleInternal(id, db, tra, DateTimeOffset.UtcNow).ConfigureAwait(false);
 
         if (info == null)
             return false;
@@ -826,7 +827,8 @@ end;
     }
 
     // not cluster safe - queue and task on same shard???
-    private async Task<ScheduleInfo?> TriggerScheduleInternal(string id, IDatabase db, ITransaction tra)
+    private async Task<ScheduleInfo?> TriggerScheduleInternal(string id, IDatabase db, ITransaction tra,
+        DateTimeOffset scheduledTime)
     {
         var data = (await db.HashGetAllAsync(Prefix($"schedule:{id}"))).ToDictionary(x => x.Name,
             x => x.Value);
@@ -836,13 +838,30 @@ end;
 
         data.TryGetValue("cron", out var cronEx);
         data.TryGetValue("timezone", out var tzv);
-        data.TryGetValue("next", out var nextOffset);
+        //data.TryGetValue("next", out var nextOffset);
         data.TryGetValue("queue", out var queue);
         data.TryGetValue("data", out var payload);
         data.TryGetValue("topic", out var topic);
         data.TryGetValue("unique", out var unique);
         data.TryGetValue("tenant", out var tenant);
         data.TryGetValue("retries", out var retries);
+        data.TryGetValue("expire", out var expire);
+
+        // if expired do nothing
+        if ((long)expire > 0)
+        {
+            var delta = (long)(DateTimeOffset.UtcNow - scheduledTime).TotalSeconds;
+            var clamped = Math.Max(0L, delta);
+
+            if (clamped > (long)expire)
+                return new ScheduleInfo
+                {
+                    Cron = cronEx!,
+                    Timezone = (string?)tzv ?? "Etc/UTC",
+                    Unique = unique == true,
+                    Expire = TimeSpan.FromSeconds((long)expire)
+                };
+        }
 
 #pragma warning disable CS4014
 
@@ -892,20 +911,22 @@ end;
         {
             var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 
-            var tasks = await db.SortedSetRangeByScoreAsync(Prefix("schedules"), 0, now, take: 100)
-                .ConfigureAwait(false);
+            var tasks = await db.SortedSetRangeByScoreWithScoresAsync(Prefix("schedules"), 0, now, take: 100).ConfigureAwait(false);
+            //var tasks = await db.SortedSetRangeByScoreAsync(Prefix("schedules"), 0, now, take: 100)
+            //    .ConfigureAwait(false);
 
-            foreach (var rid in tasks)
+            foreach (var entry in tasks)
                 try
                 {
-                    var id = (string)rid!;
+                    var time = DateTimeOffset.FromUnixTimeSeconds((long)entry.Score);
+                    var id = (string)entry.Element!;
 
                     var tra = db.CreateTransaction();
 
-                    var info = await TriggerScheduleInternal(id, db, tra);
+                    var info = await TriggerScheduleInternal(id, db, tra, time).ConfigureAwait(false);
 
                     if (info == null)
-                        continue; // TODO: ???
+                        continue;
 
                     // when recurring
                     if (!string.IsNullOrWhiteSpace(info.Cron))
@@ -1132,6 +1153,7 @@ end;
                 Cron = schedule["cron"]!,
                 Timezone = schedule["timezone"]!,
                 Next = DateTimeOffset.FromUnixTimeSeconds((long)schedule["next"]).DateTime,
+                Expire = (long)schedule["expire"] < 0 ? TimeSpan.FromSeconds((long)schedule["expire"]) : null,
                 Unique = (bool)schedule["unique"]
             });
         }
