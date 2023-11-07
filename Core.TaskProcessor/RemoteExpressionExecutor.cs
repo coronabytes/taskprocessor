@@ -186,6 +186,7 @@ public class RemoteExpressionExecutor : IRemoteExpressionExecutor
             case ExpressionType.ListInit:
             case ExpressionType.MemberInit:
             case ExpressionType.NewArrayInit:
+            case ExpressionType.Call:
                 // just execute it...
                 return Expression.Lambda(expr).Compile().DynamicInvoke();
             default:

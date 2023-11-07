@@ -738,7 +738,7 @@ end;
         var now = DateTime.UtcNow;
 
         var splits = cron.Split("|", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var next = splits.Select(x=> (DateTimeOffset?)CronExpression.Parse(x).GetNextOccurrence(now, tz))
+        var next = splits.Select(x=> (DateTimeOffset?)CronExpression.Parse(x, _options.UseCronSeconds ? CronFormat.IncludeSeconds : CronFormat.Standard).GetNextOccurrence(now, tz))
             .Where(x=>x.HasValue)
             .MinBy(x=>x!.Value);
 

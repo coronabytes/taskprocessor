@@ -61,6 +61,7 @@ public class TaskProcessorOptions
     public string Redis { get; set; } = string.Empty;
 
     public bool UseHostedService { get; set; }
+    public bool UseCronSeconds { get; set; }
 
     public IRemoteExpressionExecutor ExpressionExecutor { get; set; } = new RemoteExpressionExecutor();
 

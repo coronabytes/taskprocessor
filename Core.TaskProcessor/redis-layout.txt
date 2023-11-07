@@ -54,6 +54,7 @@
   cron		string
   next		long
   unique	bool
+  expire	long
 
 {prefix}:schedules					SORTED SET
   member: {schedule}

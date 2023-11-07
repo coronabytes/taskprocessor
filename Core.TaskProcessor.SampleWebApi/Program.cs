@@ -14,9 +14,11 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
     Queues = new[] { "high", "default" },
     MaxWorkers = 4,
     Retries = 3,
+    BaseFrequency = TimeSpan.FromSeconds(1),
     Invisibility = TimeSpan.FromMinutes(5),
     Retention = TimeSpan.FromDays(7),
-    UseHostedService = true
+    UseHostedService = true,
+    UseCronSeconds = true
 });
 
 builder.Services.AddScoped<ISomeScopedService, SomeScopedService>();
@@ -32,5 +34,12 @@ if (app.Environment.IsDevelopment())
 app.UseAuthorization();
 
 app.MapControllers();
+
+{
+    var proc = app.Services.GetRequiredService<ITaskProcessor>();
+
+    foreach (var schedule in await proc.GetSchedulesAsync("core", 0, 100))
+        await proc.CancelScheduleAsync(schedule.Id, "core");
+}
 
 app.Run();

@@ -17,32 +17,35 @@ public class ScheduleController : ControllerBase
     }
 
     [HttpPost("create")]
-    public async Task Create()
+    public async Task Create([FromQuery] string id = "my-unique-id",  
+        [FromQuery] string cron = "10 * * * * * | */30 * * * * *",
+        [FromQuery] string timezone = "Europe/Berlin"
+        )
     {
         await _processor.ResumeAsync().ConfigureAwait(false);
 
         await _processor.UpsertScheduleAsync(new ScheduleData
             {
-                Id = "my-unique-id",
-                Cron = "*/5 * * * * | */3 * * * * | 0 0 L * *",
-                Timezone = "Europe/Berlin",
+                Id = id,
+                Cron = cron,
+                Timezone = timezone,
                 Tenant = "core",
                 Unique = true,
                 Expire = TimeSpan.FromSeconds(30),
                 Queue = "default"
-            }, () => _someScopedService.DoSomethingAsync("scheduled task!", CancellationToken.None))
+            }, () => _someScopedService.DoSomethingAsync($"{id} {timezone}", CancellationToken.None))
             .ConfigureAwait(false);
     }
 
     [HttpPost("cancel")]
-    public async Task Cancel()
+    public async Task Cancel([FromQuery] string id = "my-unique-id")
     {
-        await _processor.CancelScheduleAsync("my-unique-id", "core").ConfigureAwait(false);
+        await _processor.CancelScheduleAsync(id, "core").ConfigureAwait(false);
     }
 
     [HttpGet("list")]
     public async Task<IEnumerable<ScheduleInfo>> Get()
     {
-        return await _processor.GetSchedulesAsync("core").ConfigureAwait(false);
+        return await _processor.GetSchedulesAsync("core", 0, 100).ConfigureAwait(false);
     }
 }
