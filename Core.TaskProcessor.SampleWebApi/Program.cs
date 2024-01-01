@@ -1,4 +1,5 @@
 using Core.TaskProcessor;
+using Core.TaskProcessor.Dashboard;
 using Core.TaskProcessor.SampleWebApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -20,8 +21,18 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
     UseHostedService = true,
     UseCronSeconds = true
 });
+builder.Services.AddTaskProcessorDashboard(new TaskProcessorDashboardOptions
+{
+
+});
 
 builder.Services.AddScoped<ISomeScopedService, SomeScopedService>();
+
+builder.Services.AddAuthorizationBuilder()
+    .AddPolicy("taskprocessor_admin", policy =>
+        policy
+            .RequireRole("taskprocessor"));
+
 
 var app = builder.Build();
 
@@ -34,6 +45,7 @@ if (app.Environment.IsDevelopment())
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapTaskProcessorDashboard();
 
 {
     var proc = app.Services.GetRequiredService<ITaskProcessor>();

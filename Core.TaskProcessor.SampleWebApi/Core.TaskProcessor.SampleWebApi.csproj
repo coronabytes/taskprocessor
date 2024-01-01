@@ -13,6 +13,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Core.TaskProcessor.Dashboard\Core.TaskProcessor.Dashboard.csproj" />
     <ProjectReference Include="..\Core.TaskProcessor\Core.TaskProcessor.csproj" />
   </ItemGroup>
 
