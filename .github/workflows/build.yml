@@ -25,6 +25,9 @@ jobs:
     - name: npm build
       working-directory: ./dashboard
       run: npm run build
+
+    - name: copy vue dist to aspnetcore
+      run: cp -Rf ./dashboard/dist/* ./Core.TaskProcessor.Dashboard/static/
     
     - name: dotnet
       uses: actions/setup-dotnet@v3
