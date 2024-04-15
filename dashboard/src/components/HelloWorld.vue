@@ -6,23 +6,8 @@
         <template #bottom></template>
       </v-data-table>-->
     <v-row>
-
-      <v-col cols="12" md="4">
-        <v-card>
-          <Doughnut :data="chartData" :options="chartOptions"/>
-        </v-card>
-      </v-col>
-
-      <v-col cols="12" md="4">
-        <v-card>
-          <Doughnut :data="chartData" :options="chartOptions"/>
-        </v-card>
-      </v-col>
-
-      <v-col cols="12" md="4">
-        <v-card>
-          <Doughnut :data="chartData" :options="chartOptions"/>
-        </v-card>
+      <v-col v-for="item in queues" cols="12" md="4" >
+        <QueueCard queue="item"/>
       </v-col>
     </v-row>
 
@@ -32,24 +17,9 @@
 </template>
 
 <script setup lang="ts">
-  import { Doughnut } from 'vue-chartjs'
-  import { Chart as ChartJS, ArcElement, Tooltip, Legend } from 'chart.js'
-  ChartJS.register(ArcElement,  Tooltip, Legend)
-
-  const chartData = {
-    labels: ['VueJs', 'EmberJs', 'ReactJs', 'AngularJs'],
-    datasets: [
-      {
-        backgroundColor: ['#41B883', '#E46651', '#00D8FF', '#DD1B16'],
-        data: [40, 20, 80, 10]
-      }
-    ]
-  };
-
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false
-  }
+  import axios from 'axios';
+  import { ref } from 'vue'
+  import QueueCard from "@/components/QueueCard.vue";
 
   const headers = [
     { title: 'Name', align: 'start', sortable: false, key: 'name' },
@@ -63,4 +33,12 @@
       habitat: 'Savanna, Forests',
     },
   ];
+
+  const queues = ref([])
+
+  axios.get('/taskprocessor/api/queues')
+    .then(response => {
+      queues.value = response.data;
+    })
+    .catch(error => console.log(error))
 </script>

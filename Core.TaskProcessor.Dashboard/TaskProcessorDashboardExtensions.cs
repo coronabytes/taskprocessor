@@ -23,34 +23,34 @@ namespace Core.TaskProcessor.Dashboard
         {
             var options = app.Services.GetRequiredService<TaskProcessorDashboardOptions>();
 
-            app.MapGet($"{options.Prefix}/batches", async (ITaskProcessor proc) =>
+            app.MapGet($"{options.Prefix}/api/batches", async (ITaskProcessor proc) =>
             {
                 return await proc.GetBatchesAsync("core", 0, 50);
             });
 
-            app.MapGet($"{options.Prefix}/schedules", async (ITaskProcessor proc) =>
+            app.MapGet($"{options.Prefix}/api/schedules", async (ITaskProcessor proc) =>
             {
                 return await proc.GetSchedulesAsync("core", 0, 50);
             });
 
-            app.MapGet($"{options.Prefix}/queues", async (ITaskProcessor proc) =>
+            app.MapGet($"{options.Prefix}/api/queues", async (ITaskProcessor proc) =>
             {
                 return await proc.GetQueuesAsync();
             });//.RequireAuthorization("taskprocessor_admin");
 
-            app.MapPost($"{options.Prefix}/batch/{{batchId}}/cancel", async (ITaskProcessor proc, [FromRoute] string batchId) =>
+            app.MapPost($"{options.Prefix}/api/batch/{{batchId}}/cancel", async (ITaskProcessor proc, [FromRoute] string batchId) =>
             {
                 return await proc.CancelBatchAsync(batchId);
             });//.RequireAuthorization("taskprocessor_admin");
 
-            app.MapPost($"{options.Prefix}/schedule/{{scheduleId}}/cancel", 
+            app.MapPost($"{options.Prefix}/api/schedule/{{scheduleId}}/cancel", 
                 async (ITaskProcessor proc, HttpContext ctx, [FromRoute] string scheduleId) =>
             {
                 var tenant = await options.TenantProvider.Invoke(ctx);
                 return await proc.CancelScheduleAsync(scheduleId, tenant);
             });//.RequireAuthorization("taskprocessor_admin");
 
-            app.MapPost($"{options.Prefix}/schedule/{{scheduleId}}/fire", 
+            app.MapPost($"{options.Prefix}/api/schedule/{{scheduleId}}/fire", 
                 async (ITaskProcessor proc, [FromRoute] string scheduleId) =>
             {
                 return await proc.TriggerScheduleAsync(scheduleId);

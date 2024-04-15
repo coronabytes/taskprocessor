@@ -38,7 +38,7 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
-      '/api': {
+      '/taskprocessor/api': {
         target: 'http://localhost:5148',
         changeOrigin: true,
         secure: false,
