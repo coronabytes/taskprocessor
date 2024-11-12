@@ -27,7 +27,7 @@ jobs:
       with:
         find: "<Version>.*<\\/Version>"
         replace: "${{ steps.vars.outputs.VERSION }}"
-        include: "**/Core.Observability.csproj"
+        include: "**/Core.TaskProcessor.csproj"
         regex: true
     
     - name: Build
