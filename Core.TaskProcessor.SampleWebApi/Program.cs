@@ -1,12 +1,11 @@
 using Core.TaskProcessor;
-using Core.TaskProcessor.Dashboard;
 using Core.TaskProcessor.SampleWebApi.Services;
+using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddOpenApi();
 
 builder.Services.AddTaskProcessor(new TaskProcessorOptions
 {
@@ -21,31 +20,20 @@ builder.Services.AddTaskProcessor(new TaskProcessorOptions
     UseHostedService = true,
     UseCronSeconds = true
 });
-builder.Services.AddTaskProcessorDashboard(new TaskProcessorDashboardOptions
-{
-
-});
 
 builder.Services.AddScoped<ISomeScopedService, SomeScopedService>();
-
-builder.Services.AddAuthorizationBuilder()
-    .AddPolicy("taskprocessor_admin", policy =>
-        policy
-            .RequireRole("taskprocessor"));
-
 
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseSwagger();
-    app.UseSwaggerUI();
+    app.MapOpenApi();
+    app.MapScalarApiReference();
 }
 
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapTaskProcessorDashboard();
 
 {
     var proc = app.Services.GetRequiredService<ITaskProcessor>();

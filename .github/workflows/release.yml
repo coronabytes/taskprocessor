@@ -16,7 +16,7 @@ jobs:
     - name: Setup
       uses: actions/setup-dotnet@v3
       with:
-        dotnet-version: 8.x
+        dotnet-version: 9.x
         
     - name: Build Version
       id: vars
@@ -27,7 +27,7 @@ jobs:
       with:
         find: "<Version>.*<\\/Version>"
         replace: "${{ steps.vars.outputs.VERSION }}"
-        include: "**/Core.TaskProcessor.csproj"
+        include: "**/Core.Observability.csproj"
         regex: true
     
     - name: Build

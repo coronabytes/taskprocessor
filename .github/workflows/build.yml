@@ -16,23 +16,23 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    - uses: actions/setup-node@master
+    #- uses: actions/setup-node@master
     
-    - name: npm install
-      working-directory: ./dashboard
-      run: npm install
+    #- name: npm install
+    #  working-directory: ./dashboard
+    #  run: npm install
       
-    - name: npm build
-      working-directory: ./dashboard
-      run: npm run build
+    #- name: npm build
+    #  working-directory: ./dashboard
+    #  run: npm run build
 
-    - name: copy vue dist to aspnetcore
-      run: cp -Rf ./dashboard/dist/* ./Core.TaskProcessor.Dashboard/static/
+    #- name: copy vue dist to aspnetcore
+    #  run: cp -Rf ./dashboard/dist/* ./Core.TaskProcessor.Dashboard/static/
     
     - name: dotnet
       uses: actions/setup-dotnet@v3
       with:
-        dotnet-version: 8.x
+        dotnet-version: 9.x
     
     - name: build
       run: dotnet build --configuration Release

@@ -9,8 +9,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Core.TaskProcessor.Tests", 
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Core.TaskProcessor.SampleWebApi", "Core.TaskProcessor.SampleWebApi\Core.TaskProcessor.SampleWebApi.csproj", "{A37C75D6-DD7A-4368-BAA0-CF6ACCAD8C8A}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Core.TaskProcessor.Dashboard", "Core.TaskProcessor.Dashboard\Core.TaskProcessor.Dashboard.csproj", "{95F89C4F-A7D8-4177-BC64-EF15E73D9229}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,10 +27,6 @@ Global
 		{A37C75D6-DD7A-4368-BAA0-CF6ACCAD8C8A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A37C75D6-DD7A-4368-BAA0-CF6ACCAD8C8A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A37C75D6-DD7A-4368-BAA0-CF6ACCAD8C8A}.Release|Any CPU.Build.0 = Release|Any CPU
-		{95F89C4F-A7D8-4177-BC64-EF15E73D9229}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{95F89C4F-A7D8-4177-BC64-EF15E73D9229}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{95F89C4F-A7D8-4177-BC64-EF15E73D9229}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{95F89C4F-A7D8-4177-BC64-EF15E73D9229}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
