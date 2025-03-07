@@ -50,6 +50,11 @@ public class TaskProcessorOptions
     public bool Deadletter { get; set; } = true;
 
     /// <summary>
+    ///   when retries are exhausted on unique schedules they will never run again until task removed 
+    /// </summary>
+    public bool DeadletterUniqueSchedules { get; set; } = false;
+
+    /// <summary>
     ///     deduplication window
     /// </summary>
     public TimeSpan Invisibility { get; set; } = TimeSpan.FromMinutes(5);
@@ -60,7 +65,7 @@ public class TaskProcessorOptions
 
     public string Redis { get; set; } = string.Empty;
 
-    public bool UseHostedService { get; set; }
+    //public bool UseHostedService { get; set; }
     public bool UseCronSeconds { get; set; }
 
     public IRemoteExpressionExecutor ExpressionExecutor { get; set; } = new RemoteExpressionExecutor();

@@ -575,7 +575,7 @@ return #(taskIds);
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
                                 flags: CommandFlags.FireAndForget);
                         //remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
-                        if (_options.Deadletter)
+                        if (_options.Deadletter && (!string.IsNullOrEmpty(task.BatchId) || _options.DeadletterUniqueSchedules))
                             tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                         else
@@ -663,7 +663,7 @@ return #(taskIds);
                         CommandFlags.FireAndForget);
                 }
 
-                if (!task.IsContinuation && string.IsNullOrEmpty(task.BatchId))
+                if (!task.IsContinuation && !string.IsNullOrEmpty(task.BatchId))
                     tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "duration",
                         (DateTimeOffset.UtcNow - start).TotalSeconds, CommandFlags.FireAndForget);
 #pragma warning restore CS4014
