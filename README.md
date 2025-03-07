@@ -19,27 +19,37 @@ dotnet add package Core.TaskProcessor
 ## Initialization in AspNetCore
 
 ```csharp
-builder.Services.AddTaskProcessor(new TaskProcessorOptions
+builder.Services.AddTaskProcessor((sp, options) =>
 {
-    Redis = "localhost:6379,abortConnect=false",
-    Prefix = "{coretask}", // redis cluster mode needs single hash slot
-    Queues = new[] { "high", "default", "low" }, // pop queues from left to right - first non empty queue wins
-    MaxWorkers = 4, // action block concurrency limit
-    Retries = 3,
-    Invisibility = TimeSpan.FromMinutes(5), // task will be redelivered when taking longer than this
-    BaseFrequency = TimeSpan.FromSeconds(5), // fetches tasks when reactive events failed
-    PushbackFrequency = TimeSpan.FromSeconds(10), // how often to run task retry/delay pushbacks
-    CleanUpFrequency = TimeSpan.FromMinutes(5), //  how often to run batch cleanups
-    Retention = TimeSpan.FromDays(7), // batch information will be kept this long
-    UseHostedService = true, // use supplied background worker service
-    OnTaskFailedDelay = (ctx, retry) => // delay retry on task failure
+    options.Redis = "localhost:6379,abortConnect=false";
+    options.Prefix = "{coretask}"; // redis cluster mode needs single hash slot
+    options.Queues = ["high", "default", "low"]; // pop queues from left to right - first non empty queue wins
+    options.MaxWorkers = 4; // action block concurrency limit
+    options.Retries = 3; // if tasks fails x times its discarded or deadlettered
+    options.Invisibility = TimeSpan.FromMinutes(5); // task will be redelivered when taking longer than this
+    options.BaseFrequency = TimeSpan.FromSeconds(5); // fetches tasks when reactive events failed
+    options.PushbackFrequency = TimeSpan.FromSeconds(10); // how often to run task retry/delay pushbacks
+    options.CleanUpFrequency = TimeSpan.FromMinutes(5); // how often to run batch cleanups
+    options.Retention = TimeSpan.FromDays(7); // batch information will be kept this long
+    options.Deadletter = true; // move failed tasks to deadletter queues
+    options.DeadletterUniqueSchedules = false; // ignore deadletter for unique schedules or they will pause indefinatly
+    options.UseCronSeconds = false;
+    options.OnTaskFailedDelay = (_, retry) => // delay retry on task failure
         Task.FromResult(retry switch
         {
             2 => TimeSpan.FromSeconds(5),
             1 => TimeSpan.FromSeconds(60),
-            _ => (TimeSpan?)null,
-        })
+            _ => (TimeSpan?)null
+        });
+    options.OnTaskError = (_, exception) =>
+    {
+        sp.GetRequiredService<ILogger<ITaskProcessor>>()
+            .LogError(exception, "Task Error");
+
+        return Task.CompletedTask;
+    };
 });
+builder.Services.AddTaskProcessorExecutor();
 ```
 
 ## Enqueue batch tasks
