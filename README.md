@@ -50,6 +50,13 @@ builder.Services.AddTaskProcessor((sp, options) =>
 });
 builder.Services.AddTaskProcessorExecutor();
 ```
+## Enqueue single task
+
+```csharp
+var taskId = await _processor.EnqueueTaskAsync("default", "my-tenant",
+  _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
+  delayUntil: DateTimeOffset.UtcNow.AddSeconds(5));
+```
 
 ## Enqueue batch tasks
 
