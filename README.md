@@ -31,8 +31,8 @@ builder.Services.AddTaskProcessor((sp, options) =>
     options.CleanUpFrequency = TimeSpan.FromMinutes(5); // how often to run batch cleanups
     options.Retention = TimeSpan.FromDays(7); // batch information will be kept this long
     options.Deadletter = true; // move failed tasks to deadletter queues
-    options.DeadletterUniqueSchedules = false; // ignore deadletter for unique schedules or they will pause indefinatly
-    options.UseCronSeconds = false;
+    options.DeadletterSchedules = false; // ignore deadletter for schedules or unique ones will pause indefinatly
+    options.UseCronSeconds = false; // * * * * *
     options.OnTaskFailedDelay = (_, retry) => // delay retry on task failure
         Task.FromResult(retry switch
         {
