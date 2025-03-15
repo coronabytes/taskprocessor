@@ -52,7 +52,7 @@ public class TaskProcessorOptions
     /// <summary>
     ///   when retries are exhausted on unique schedules they will never run again until task removed 
     /// </summary>
-    public bool DeadletterUniqueSchedules { get; set; } = false;
+    public bool DeadletterSchedules { get; set; } = false;
 
     /// <summary>
     ///     deduplication window

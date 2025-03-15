@@ -139,6 +139,52 @@ public class TaskProcessor : ITaskProcessor
         return batchId;
     }
 
+    public async Task<string> EnqueueTaskAsync(string queue, string tenant, TaskData task)
+    {
+        var taskId = Guid.NewGuid().ToString("D");
+
+        var q = task.Queue ?? queue;
+
+        var db = _redis.GetDatabase();
+        var tra = db.CreateTransaction();
+#pragma warning disable CS4014
+        
+        tra.HashSetAsync(Prefix($"task:{taskId}"), [
+            new HashEntry("id", taskId),
+            new HashEntry("tenant", tenant),
+            new HashEntry("data", task.Data),
+            new HashEntry("topic", task.Topic),
+            new HashEntry("queue", q),
+            new HashEntry("retries", task.Retries ?? _options.Retries)
+        ]);
+
+        if (task.DelayUntil.HasValue)
+            tra.SortedSetAddAsync(Prefix($"queue:{queue}:pushback"), taskId,
+                task.DelayUntil.Value.ToUnixTimeSeconds());
+        else
+        {
+            tra.SortedSetAddAsync(Prefix("queues"), q, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            tra.ListLeftPushAsync(Prefix($"queue:{q}"), taskId);
+            tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q}:event")), "fetch");
+        }
+
+#pragma warning enable CS4014
+            await tra.ExecuteAsync().ConfigureAwait(false);
+        return taskId;
+    }
+
+    public Task<string> EnqueueTaskAsync(string queue, string tenant, Expression<Func<Task>> methodCall, DateTimeOffset? delayUntil = null, int? retries = null)
+    {
+        return EnqueueTaskAsync(queue, tenant, new TaskData
+        {
+            Topic = "internal:expression:v1",
+            Data = _options.ExpressionExecutor.Serialize(methodCall),
+            DelayUntil = delayUntil,
+            Queue = queue,
+            Retries = retries
+        });
+    }
+
     public async Task<bool> AppendBatchAsync(string queue, string tenant, string batchId, List<TaskData> tasks)
     {
         var db = _redis.GetDatabase();
@@ -291,6 +337,29 @@ end
                     Processor = this,
                     TaskId = j,
                     ScheduleId = (string)taskData["schedule"]!,
+                    Tenant = (string)taskData["tenant"]!,
+                    Queue = (string?)taskData["queue"],
+                    CancelSource = linkedCts,
+                    CancelToken = linkedCts.Token,
+                    Topic = (string?)taskData["topic"] ?? string.Empty,
+                    Data = (byte[])taskData["data"]!,
+                    BatchId = null,
+                    Retries = (int?)taskData["retries"],
+                    IsCancellation = false,
+                    IsContinuation = false
+                };
+
+                _tasks.TryAdd(info.TaskId, info);
+                _actionBlock.Post(info);
+            }
+            else // single task
+            {
+                var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token);
+
+                var info = new TaskContext
+                {
+                    Processor = this,
+                    TaskId = j,
                     Tenant = (string)taskData["tenant"]!,
                     Queue = (string?)taskData["queue"],
                     CancelSource = linkedCts,
@@ -575,7 +644,7 @@ return #(taskIds);
                             tra.HashIncrementAsync(Prefix($"batch:{task.BatchId}"), "failed",
                                 flags: CommandFlags.FireAndForget);
                         //remaining = tra.HashDecrementAsync(Prefix($"batch:{task.BatchId}"), "remaining");
-                        if (_options.Deadletter && (!string.IsNullOrEmpty(task.BatchId) || _options.DeadletterUniqueSchedules))
+                        if (_options.Deadletter && (string.IsNullOrEmpty(task.ScheduleId) || _options.DeadletterSchedules))
                             tra.SortedSetAddAsync(Prefix($"queue:{task.Queue}:deadletter"), task.TaskId,
                                 DateTimeOffset.UtcNow.ToUnixTimeSeconds());
                         else

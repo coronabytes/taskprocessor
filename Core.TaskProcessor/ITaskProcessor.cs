@@ -35,6 +35,23 @@ public interface ITaskProcessor
     Task<string> EnqueueBatchAsync(string queue, string tenant, List<TaskData> tasks,
         List<TaskData>? continuations = null, string? scope = null);
 
+    /// <summary>
+    ///   enqueue single task without batch
+    /// </summary>
+    /// <param name="queue">queue to run tasks and continuations on</param>
+    /// <param name="tenant">tenant id</param>
+    /// <param name="task"></param>
+    /// <returns>task id</returns>
+    Task<string> EnqueueTaskAsync(string queue, string tenant, TaskData task);
+
+    /// <summary>
+    ///   enqueue single task without batch
+    /// </summary>
+    /// <param name="queue">queue to run tasks and continuations on</param>
+    /// <param name="tenant">tenant id</param>
+    /// <param name="methodCall"></param>
+    /// <returns>task id</returns>
+    Task<string> EnqueueTaskAsync(string queue, string tenant, Expression<Func<Task>> methodCall, DateTimeOffset? delayUntil = null, int? retries = null);
 
     /// <summary>
     ///     appends tasks to existing a batch. continuations will run again if batch previously completed.
