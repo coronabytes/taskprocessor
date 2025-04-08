@@ -54,7 +54,7 @@ builder.Services.AddTaskProcessorExecutor();
 
 ```csharp
 var taskId = await _processor.EnqueueTaskAsync("default", "my-tenant",
-  _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
+  () => _someScopedService.DoSomethingAsync("hello", CancellationToken.None),
   delayUntil: DateTimeOffset.UtcNow.AddSeconds(5));
 ```
 
