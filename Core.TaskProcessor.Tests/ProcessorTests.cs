@@ -183,9 +183,14 @@ public class ProcessorTests
     }
 
     [Fact]
-    public async Task Cleanup()
+    public async Task Pushback()
     {
         await _processor.PushbackAsync();
+    }
+
+    [Fact]
+    public async Task Cleanup()
+    {
         await _processor.CleanUpAsync();
     }
 

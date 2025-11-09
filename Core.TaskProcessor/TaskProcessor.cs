@@ -240,7 +240,16 @@ public class TaskProcessor : ITaskProcessor
         foreach (var q in push)
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
+
+            if (queue.StartsWith("fair_"))
+            {
+                tra.HashIncrementAsync(Prefix($"queue:{q}:fairness"), tenant, q.Value.Count);
+                tra.ListLeftPushAsync(Prefix($"queue:{q.Key}:{tenant}"), q.Value.ToArray());
+            }
+            else
+                tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
+
+
             tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q.Key}:event")), "fetch");
         }
 #pragma warning restore CS4014
@@ -529,8 +538,16 @@ for i, v in ipairs(queues) do
   local q = ""{Prefix("queue:")}""..v
   local r = redis.call('zrange', q.."":pushback"", 0, t, 'BYSCORE', 'LIMIT', 0, 500);
   for j, w in ipairs(r) do
-    redis.call('lpush', q, w);
     redis.call('zadd', ""{Prefix("queues")}"", t, v);
+    
+    if string.find(q, 'fair_') then
+      local tenant = redis.call('hget', q..':'..w, 'tenant');
+      redis.call('hincrby', q..':fairness', tenant);
+      redis.call('lpush', q..':'..tenant, taskId);
+    else  
+      redis.call('lpush', q, w);
+    end
+
     redis.call('zrem', q.."":pushback"", w);
     redis.call('lrem', q.."":checkout"", 0, w);
   end;
@@ -773,8 +790,16 @@ return #(taskIds);
                 }
                 else
                 {
-                    tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId,
-                        flags: CommandFlags.FireAndForget);
+                    if (task.Queue!.StartsWith("fair_"))
+                    {
+                        tra.HashIncrementAsync(Prefix($"queue:{task.Queue}:fairness"), task.Tenant);
+                        tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}:{task.Tenant}"), task.TaskId,
+                            flags: CommandFlags.FireAndForget);
+                    }
+                    else
+                        tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}"), task.TaskId,
+                            flags: CommandFlags.FireAndForget);
+
                     tra.SortedSetRemoveAsync(Prefix($"queue:{task.Queue}:pushback"), task.TaskId,
                         CommandFlags.FireAndForget);
                 }
@@ -796,7 +821,6 @@ return #(taskIds);
         if (!_shutdown.IsCancellationRequested)
             await FetchAsync();
     }
-
     private async Task CompleteBatchAsync(TaskContext task, IDatabase db)
     {
         if (string.IsNullOrEmpty(task.BatchId))
@@ -818,8 +842,17 @@ local continuations = redis.call('lrange', KEYS[1], 0, 100);
 
 for i, taskId in ipairs(continuations) do
   local q = redis.call('hget', '{Prefix("task:")}'..taskId, 'queue');
+
   redis.call('zadd', ""{Prefix("queues")}"", t, q);
-  redis.call('lpush', '{Prefix("queue:")}'..q, taskId);
+
+  if string.find(queue, 'fair_') then
+     local tenant = redis.call('hget', '{Prefix("task:")}'..taskId, 'tenant');
+     redis.call('hincrby', '{Prefix("queue:")}'..q..':fairness', tenant);
+     redis.call('lpush', '{Prefix("queue:")}'..q..':'..tenant, taskId);
+  else  
+    redis.call('lpush', '{Prefix("queue:")}'..q, taskId);
+  end
+
   redis.call('publish', '{Prefix("queue:")}'..q..':event', 'fetch');
 end;
 
