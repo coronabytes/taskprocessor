@@ -596,7 +596,15 @@ for j, taskId in ipairs(taskIds) do
   redis.call('hset', '{Prefix("task:")}'..taskId, 'retries', ARGV[2]);
   redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
   redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
-  redis.call('lpush', KEYS[1], taskId);
+
+  if string.find(KEYS[1], 'fair_') then
+    local tenant = redis.call('hget', ""{Prefix("task:")}""..taskId, 'tenant');
+    redis.call('hincrby', KEYS[1]..':fairness', tenant);
+    redis.call('lpush', KEYS[1]..':'..tenant, taskId);
+  else  
+    redis.call('lpush', KEYS[1], taskId);
+  end
+  
   redis.call('zrem', KEYS[2], taskId);
   redis.call('publish', KEYS[1]..':event', 'fetch');
 end;

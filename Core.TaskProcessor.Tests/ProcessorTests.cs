@@ -15,7 +15,7 @@ public class ProcessorTests
         _processor = new TaskProcessor(new TaskProcessorOptions
         {
             Prefix = "{dev}",
-            MaxWorkers = 1,
+            MaxWorkers = 2,
             Queues = new[] { "q1", "fair_q2", "q3" },
             Redis = "localhost:6379,abortConnect=false",
             Retries = 3,
@@ -45,7 +45,7 @@ public class ProcessorTests
     [Fact]
     public async Task EnqueueFairness()
     {
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 100; i++)
         {
             await _processor.EnqueueTaskAsync("fair_q2", "1001", new TaskData
             {
@@ -55,7 +55,7 @@ public class ProcessorTests
 
         await Task.Delay(500);
 
-        for (int i = 0; i < 10; i++)
+        for (int i = 0; i < 100; i++)
         {
             await _processor.EnqueueTaskAsync("fair_q2", "1002", new TaskData
             {
