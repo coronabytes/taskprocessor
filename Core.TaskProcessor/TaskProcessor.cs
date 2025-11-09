@@ -1,8 +1,9 @@
-using System.Collections.Concurrent;
-using System.Linq.Expressions;
-using System.Threading.Tasks.Dataflow;
 using Cronos;
 using StackExchange.Redis;
+using System.Collections.Concurrent;
+using System.Linq.Expressions;
+using System.Threading.Tasks;
+using System.Threading.Tasks.Dataflow;
 
 namespace Core.TaskProcessor;
 
@@ -128,9 +129,17 @@ public class TaskProcessor : ITaskProcessor
         foreach (var q in push)
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
-            tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q.Key}:event")), "fetch");
 
+            if (q.Key.StartsWith("fair_"))
+            {
+                tra.HashIncrementAsync(Prefix($"queue:{q.Key}:fairness"), tenant, q.Value.Count);
+                tra.ListLeftPushAsync(Prefix($"queue:{q.Key}:{tenant}"), q.Value.ToArray());
+            }
+            else
+                tra.ListLeftPushAsync(Prefix($"queue:{q.Key}"), q.Value.ToArray());
+
+
+            tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q.Key}:event")), "fetch");
         }
 
 #pragma warning restore CS4014
@@ -164,7 +173,15 @@ public class TaskProcessor : ITaskProcessor
         else
         {
             tra.SortedSetAddAsync(Prefix("queues"), q, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
-            tra.ListLeftPushAsync(Prefix($"queue:{q}"), taskId);
+            
+            if (queue.StartsWith("fair_"))
+            {
+                tra.HashIncrementAsync(Prefix($"queue:{q}:fairness"), tenant);
+                tra.ListLeftPushAsync(Prefix($"queue:{q}:{tenant}"), taskId);
+            }
+            else
+                tra.ListLeftPushAsync(Prefix($"queue:{q}"), taskId);
+
             tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{q}:event")), "fetch");
         }
 
@@ -255,20 +272,50 @@ public class TaskProcessor : ITaskProcessor
 
             var res = await db.ScriptEvaluateAsync($@"
 for i, queue in ipairs(KEYS) do
-local taskId = redis.call('rpoplpush', queue, queue.."":checkout"");
-if taskId then
-  local invis = redis.call('time')[1] + ARGV[1];
-  redis.call('zadd', queue.."":pushback"", invis, taskId);
-  local taskData = redis.call('hgetall', ""{Prefix("task:")}""..taskId);
-  local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
 
-  if batchId then
-    local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
-    return {{queue, taskId, taskData, batchData}}; 
+if string.find(queue, 'fair_') then
+  local tenant = redis.call('hrandfield', queue.."":fairness"");
+
+  if tenant then
+    local taskId = redis.call('rpoplpush', queue.."":""..tenant, queue.."":checkout"");
+
+    if taskId then
+      local ctr = redis.call('hincrby', queue.."":fairness"", tenant, -1);
+
+      if ctr <= 0 then
+        redis.call('hdel', queue.."":fairness"", tenant);
+      end;
+
+      local invis = redis.call('time')[1] + ARGV[1];
+      redis.call('zadd', queue.."":pushback"", invis, taskId);
+      local taskData = redis.call('hgetall', ""{Prefix("task:")}""..taskId);
+      local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
+
+      if batchId then
+        local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
+        return {{queue, taskId, taskData, batchData}}; 
+      end;
+
+      return {{queue, taskId, taskData}}; 
+    end;
   end;
+else
+  local taskId = redis.call('rpoplpush', queue, queue.."":checkout"");
+  if taskId then
+    local invis = redis.call('time')[1] + ARGV[1];
+    redis.call('zadd', queue.."":pushback"", invis, taskId);
+    local taskData = redis.call('hgetall', ""{Prefix("task:")}""..taskId);
+    local batchId = redis.call('hget', ""{Prefix("task:")}""..taskId, ""batch"");
 
-  return {{queue, taskId, taskData}}; 
+    if batchId then
+      local batchData = redis.call('hgetall', ""{Prefix("batch:")}""..batchId);
+      return {{queue, taskId, taskData, batchData}}; 
+    end;
+
+    return {{queue, taskId, taskData}}; 
+  end;
 end;
+
 end
 ", _queueKeys, new RedisValue[] { (long)_options.Retention.TotalSeconds });
 
@@ -951,7 +998,15 @@ end;
         }, CommandFlags.FireAndForget);
 
         // enqueue
-        tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId, flags: CommandFlags.FireAndForget);
+
+        if (queue.StartsWith("fair_"))
+        {
+            tra.HashIncrementAsync(Prefix($"queue:{queue}:fairness"), tenant);
+            tra.ListLeftPushAsync(Prefix($"queue:{queue}:{tenant}"), newTaskId, flags: CommandFlags.FireAndForget);
+        }
+        else
+            tra.ListLeftPushAsync(Prefix($"queue:{queue}"), newTaskId, flags: CommandFlags.FireAndForget);
+
         tra.SortedSetAddAsync(Prefix("queues"), queue, DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             CommandFlags.FireAndForget);
         tra.PublishAsync(RedisChannel.Literal(Prefix($"queue:{queue}:event")), "fetch", CommandFlags.FireAndForget);
@@ -1163,7 +1218,8 @@ end;
         return new QueueInfo
         {
             Name = name,
-            Length = await db.ListLengthAsync(Prefix($"queue:{name}")),
+            // TODO: global tracking of fair queue length
+            Length =  name.StartsWith("fair_") ? -1 : await db.ListLengthAsync(Prefix($"queue:{name}")),
             Checkout = await db.ListLengthAsync(Prefix($"queue:{name}:checkout")),
             Pushback = await db.SortedSetLengthAsync(Prefix($"queue:{name}:pushback")),
             Deadletter = await db.SortedSetLengthAsync(Prefix($"queue:{name}:deadletter"))
