@@ -10,6 +10,7 @@ dotnet add package Core.TaskProcessor
 - open source (Apache 2.0)
 - exclusive redis/valkey/elasticache 6.2+ storage engine (cluster mode supported)
 - multi tenancy
+  - 2.3.0 enable fair queues by including [fair] in queue name (e.g. "myqueue[fair]") 
 - global pause and resume of all processing
 - batch cancelation can abort in process tasks "instantly"
 - easy to access batch statistics per tenant
