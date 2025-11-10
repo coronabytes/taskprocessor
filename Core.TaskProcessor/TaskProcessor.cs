@@ -130,7 +130,7 @@ public class TaskProcessor : ITaskProcessor
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
-            if (q.Key.StartsWith("fair_"))
+            if (q.Key.Contains("[fair]"))
             {
                 tra.HashIncrementAsync(Prefix($"queue:{q.Key}:fairness"), tenant, q.Value.Count);
                 tra.ListLeftPushAsync(Prefix($"queue:{q.Key}:{tenant}"), q.Value.ToArray());
@@ -174,7 +174,7 @@ public class TaskProcessor : ITaskProcessor
         {
             tra.SortedSetAddAsync(Prefix("queues"), q, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
             
-            if (queue.StartsWith("fair_"))
+            if (queue.Contains("[fair]"))
             {
                 tra.HashIncrementAsync(Prefix($"queue:{q}:fairness"), tenant);
                 tra.ListLeftPushAsync(Prefix($"queue:{q}:{tenant}"), taskId);
@@ -241,7 +241,7 @@ public class TaskProcessor : ITaskProcessor
         {
             tra.SortedSetAddAsync(Prefix("queues"), q.Key, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
 
-            if (queue.StartsWith("fair_"))
+            if (queue.Contains("[fair]"))
             {
                 tra.HashIncrementAsync(Prefix($"queue:{q}:fairness"), tenant, q.Value.Count);
                 tra.ListLeftPushAsync(Prefix($"queue:{q.Key}:{tenant}"), q.Value.ToArray());
@@ -282,7 +282,7 @@ public class TaskProcessor : ITaskProcessor
             var res = await db.ScriptEvaluateAsync($@"
 for i, queue in ipairs(KEYS) do
 
-if string.find(queue, 'fair_') then
+if string.find(queue, '[fair]') then
   local tenant = redis.call('hrandfield', queue.."":fairness"");
 
   if tenant then
@@ -540,7 +540,7 @@ for i, v in ipairs(queues) do
   for j, w in ipairs(r) do
     redis.call('zadd', ""{Prefix("queues")}"", t, v);
     
-    if string.find(q, 'fair_') then
+    if string.find(q, '[fair]') then
       local tenant = redis.call('hget', q..':'..w, 'tenant');
       redis.call('hincrby', q..':fairness', tenant);
       redis.call('lpush', q..':'..tenant, taskId);
@@ -597,7 +597,7 @@ for j, taskId in ipairs(taskIds) do
   redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
   redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
 
-  if string.find(KEYS[1], 'fair_') then
+  if string.find(KEYS[1], '[fair]') then
     local tenant = redis.call('hget', ""{Prefix("task:")}""..taskId, 'tenant');
     redis.call('hincrby', KEYS[1]..':fairness', tenant);
     redis.call('lpush', KEYS[1]..':'..tenant, taskId);
@@ -798,7 +798,7 @@ return #(taskIds);
                 }
                 else
                 {
-                    if (task.Queue!.StartsWith("fair_"))
+                    if (task.Queue!.Contains("[fair]"))
                     {
                         tra.HashIncrementAsync(Prefix($"queue:{task.Queue}:fairness"), task.Tenant);
                         tra.ListLeftPushAsync(Prefix($"queue:{task.Queue}:{task.Tenant}"), task.TaskId,
@@ -853,7 +853,7 @@ for i, taskId in ipairs(continuations) do
 
   redis.call('zadd', ""{Prefix("queues")}"", t, q);
 
-  if string.find(queue, 'fair_') then
+  if string.find(queue, '[fair]') then
      local tenant = redis.call('hget', '{Prefix("task:")}'..taskId, 'tenant');
      redis.call('hincrby', '{Prefix("queue:")}'..q..':fairness', tenant);
      redis.call('lpush', '{Prefix("queue:")}'..q..':'..tenant, taskId);
@@ -1040,7 +1040,7 @@ end;
 
         // enqueue
 
-        if (queue.StartsWith("fair_"))
+        if (((string)queue).Contains("[fair]"))
         {
             tra.HashIncrementAsync(Prefix($"queue:{queue}:fairness"), tenant);
             tra.ListLeftPushAsync(Prefix($"queue:{queue}:{tenant}"), newTaskId, flags: CommandFlags.FireAndForget);
@@ -1260,7 +1260,7 @@ end;
         {
             Name = name,
             // TODO: global tracking of fair queue length
-            Length =  name.StartsWith("fair_") ? -1 : await db.ListLengthAsync(Prefix($"queue:{name}")),
+            Length =  name.Contains("[fair]") ? -1 : await db.ListLengthAsync(Prefix($"queue:{name}")),
             Checkout = await db.ListLengthAsync(Prefix($"queue:{name}:checkout")),
             Pushback = await db.SortedSetLengthAsync(Prefix($"queue:{name}:pushback")),
             Deadletter = await db.SortedSetLengthAsync(Prefix($"queue:{name}:deadletter"))

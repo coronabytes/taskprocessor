@@ -16,7 +16,7 @@ public class ProcessorTests
         {
             Prefix = "{dev}",
             MaxWorkers = 2,
-            Queues = new[] { "q1", "fair_q2", "q3" },
+            Queues = new[] { "q1", "q2[fair]", "q3" },
             Redis = "localhost:6379,abortConnect=false",
             Retries = 3,
             Deadletter = true,
@@ -47,7 +47,7 @@ public class ProcessorTests
     {
         for (int i = 0; i < 100; i++)
         {
-            await _processor.EnqueueTaskAsync("fair_q2", "1001", new TaskData
+            await _processor.EnqueueTaskAsync("q2[fair]", "1001", new TaskData
             {
                 Topic = "A",
             });
@@ -57,7 +57,7 @@ public class ProcessorTests
 
         for (int i = 0; i < 100; i++)
         {
-            await _processor.EnqueueTaskAsync("fair_q2", "1002", new TaskData
+            await _processor.EnqueueTaskAsync("q2[fair]", "1002", new TaskData
             {
                 Topic = "B",
             });
@@ -89,7 +89,7 @@ public class ProcessorTests
     [Fact]
     public async Task Enqueue()
     {
-        var batchId = await _processor.EnqueueBatchAsync("q2", "1001", new List<TaskData>
+        var batchId = await _processor.EnqueueBatchAsync("q2[fair]", "1001", new List<TaskData>
         {
             new()
             {
@@ -197,7 +197,7 @@ public class ProcessorTests
     [Fact]
     public async Task RetryTasks()
     {
-        var tasks = await _processor.RetryDeadTasksAsync("q2", 3);
+        var tasks = await _processor.RetryDeadTasksAsync("q2[fair]", 3);
 
         _output.WriteLine($"{tasks} retried");
     }

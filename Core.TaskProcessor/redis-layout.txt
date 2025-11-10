@@ -13,6 +13,13 @@
 {prefix}:queue:{queue}:event		PUBSUB
   fetch
 
+# Fair Queues
+fair queues are split by tenant (grouping key)
+
+{prefix}:queue:{queue}:fairness		HASH
+  {tenant}		int
+{prefix}:queue:{queue}:{tenant}     LIST
+
 # Batches
 
 {prefix}:batch:{batch}				HASH
