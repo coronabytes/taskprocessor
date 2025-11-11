@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="Core.TaskProcessor.SampleWebApi/Core.TaskProcessor.SampleWebApi.csproj" />
+  <Project Path="Core.TaskProcessor.Tests/Core.TaskProcessor.Tests.csproj" />
+  <Project Path="Core.TaskProcessor/Core.TaskProcessor.csproj" />
+</Solution>
