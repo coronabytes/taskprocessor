@@ -2,7 +2,6 @@ using Cronos;
 using StackExchange.Redis;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
-using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
 
 namespace Core.TaskProcessor;
@@ -282,7 +281,7 @@ public class TaskProcessor : ITaskProcessor
             var res = await db.ScriptEvaluateAsync($@"
 for i, queue in ipairs(KEYS) do
 
-if string.find(queue, '[fair]') then
+if string.find(queue, '%[fair%]') ~= nil then
   local tenant = redis.call('hrandfield', queue.."":fairness"");
 
   if tenant then
@@ -540,7 +539,7 @@ for i, v in ipairs(queues) do
   for j, w in ipairs(r) do
     redis.call('zadd', ""{Prefix("queues")}"", t, v);
     
-    if string.find(q, '[fair]') then
+    if string.find(q, '%[fair%]') ~= nil then
       local tenant = redis.call('hget', q..':'..w, 'tenant');
       redis.call('hincrby', q..':fairness', tenant);
       redis.call('lpush', q..':'..tenant, taskId);
@@ -597,7 +596,7 @@ for j, taskId in ipairs(taskIds) do
   redis.call('hincrby', '{Prefix("batch:")}'..batchId, 'failed', -1)
   redis.call('hset', '{Prefix("batch:")}'..batchId, 'state', 'go')
 
-  if string.find(KEYS[1], '[fair]') then
+  if string.find(KEYS[1], '%[fair%]') ~= nil then
     local tenant = redis.call('hget', ""{Prefix("task:")}""..taskId, 'tenant');
     redis.call('hincrby', KEYS[1]..':fairness', tenant);
     redis.call('lpush', KEYS[1]..':'..tenant, taskId);
@@ -853,7 +852,7 @@ for i, taskId in ipairs(continuations) do
 
   redis.call('zadd', ""{Prefix("queues")}"", t, q);
 
-  if string.find(queue, '[fair]') then
+  if string.find(queue, '%[fair%]') ~= nil then
      local tenant = redis.call('hget', '{Prefix("task:")}'..taskId, 'tenant');
      redis.call('hincrby', '{Prefix("queue:")}'..q..':fairness', tenant);
      redis.call('lpush', '{Prefix("queue:")}'..q..':'..tenant, taskId);

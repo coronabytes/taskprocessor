@@ -70,17 +70,17 @@ app.MapControllers();
 
     //var discarded = await proc.DiscardDeadTasksAsync("default");
 
-    //await proc.UpsertScheduleAsync(new ScheduleData
-    //{
-    //    Id = "refresh",
-    //    Tenant = "core",
-    //    Queue = "default",
-    //    Cron = "0 */2 * * * *",
-    //    Timezone = "Etc/UTC",
-    //    Unique = true
-    //}, () => faulty.DoFaultyStuff());
+    await proc.UpsertScheduleAsync(new ScheduleData
+    {
+        Id = "refresh",
+        Tenant = "core",
+        Queue = "default",
+        Cron = "*/10 * * * * *",
+        Timezone = "Etc/UTC",
+        Unique = true
+    }, () => svc.DoSomething("test"));
 
-    await proc.EnqueueTaskAsync("default", "core", () => faulty.DoFaultyStuff());
+    //await proc.EnqueueTaskAsync("default", "core", () => faulty.DoFaultyStuff());
     //await proc.EnqueueTaskAsync("default", "core", () => svc.DoSomethingAsync("test", CancellationToken.None));
     //await proc.EnqueueTaskAsync("default", "core", () => svc.DoSomethingAsync("test-delay", CancellationToken.None), delayUntil: DateTimeOffset.UtcNow.AddSeconds(5));
 }
