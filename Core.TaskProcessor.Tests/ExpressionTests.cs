@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Linq.Expressions;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Core.TaskProcessor.Tests;
 

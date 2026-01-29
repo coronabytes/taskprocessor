@@ -1,6 +1,5 @@
 using Newtonsoft.Json;
 using Xunit;
-using Xunit.Abstractions;
 
 namespace Core.TaskProcessor.Tests;
 
