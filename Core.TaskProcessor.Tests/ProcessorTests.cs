@@ -1,22 +1,30 @@
 using Newtonsoft.Json;
+using Testcontainers.Redis;
 using Xunit;
 
 namespace Core.TaskProcessor.Tests;
 
-public class ProcessorTests
+public class ProcessorTests : IAsyncLifetime
 {
     private readonly ITestOutputHelper _output;
-    private readonly TaskProcessor _processor;
+    private TaskProcessor _processor = null!;
+    private readonly RedisContainer _redisContainer = new RedisBuilder("valkey/valkey:9-alpine").Build();
 
     public ProcessorTests(ITestOutputHelper output)
     {
         _output = output;
+    }
+
+    public async ValueTask InitializeAsync()
+    {
+        await _redisContainer.StartAsync();
+        
         _processor = new TaskProcessor(new TaskProcessorOptions
         {
             Prefix = "{dev}",
             MaxWorkers = 2,
             Queues = new[] { "q1", "q2[fair]", "q3" },
-            Redis = "localhost:6379,abortConnect=false",
+            Redis = _redisContainer.GetConnectionString() + ",abortConnect=false",
             Retries = 3,
             Deadletter = true,
             OnTaskStart = info =>
@@ -39,6 +47,11 @@ public class ProcessorTests
                 await Task.Delay(10, info.CancelToken);
             }
         };
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await _redisContainer.DisposeAsync();
     }
 
     [Fact]
