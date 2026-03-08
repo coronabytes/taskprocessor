@@ -23,7 +23,7 @@
 
 	<ItemGroup>
 		<PackageReference Include="Cronos" Version="0.11.1" />
-		<PackageReference Include="StackExchange.Redis" Version="2.10.1" />
+		<PackageReference Include="StackExchange.Redis" Version="2.11.8" />
 	</ItemGroup>
 
   <ItemGroup Condition=" '$(TargetFramework)' == 'net8.0' ">
