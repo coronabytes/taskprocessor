@@ -1,4 +1,4 @@
-using Newtonsoft.Json;
+using System.Text.Json;
 using Testcontainers.Redis;
 using Xunit;
 
@@ -131,15 +131,15 @@ public class ProcessorTests : IAsyncLifetime
     [Fact]
     public async Task ListBatches()
     {
-        var batches = await _processor.GetBatchesAsync("1001");
-        _output.WriteLine(JsonConvert.SerializeObject(batches, Formatting.Indented));
+            var batches = await _processor.GetBatchesAsync("1001");
+            _output.WriteLine(JsonSerializer.Serialize(batches, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     [Fact]
     public async Task ListQueues()
     {
         var queues = await _processor.GetQueuesAsync();
-        _output.WriteLine(JsonConvert.SerializeObject(queues, Formatting.Indented));
+        _output.WriteLine(JsonSerializer.Serialize(queues, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     [Fact]
@@ -191,7 +191,7 @@ public class ProcessorTests : IAsyncLifetime
         _output.WriteLine($"Run: {run}");
 
         var schedules = await _processor.GetSchedulesAsync("1001");
-        _output.WriteLine(JsonConvert.SerializeObject(schedules, Formatting.Indented));
+        _output.WriteLine(JsonSerializer.Serialize(schedules, new JsonSerializerOptions { WriteIndented = true }));
     }
 
     [Fact]
